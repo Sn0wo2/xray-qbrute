@@ -1,318 +1,183 @@
-# AVX2 and wgpu Acceleration Implementation Plan
+# AVX2 + wgpu Vulkan 加速实现计划
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox syntax for tracking.
 
-**Goal:** Add verified AVX2 four-lane and wgpu Vulkan compute backends for the fixed 16-byte SHA-512 brute-force search.
+目标：在保持现有 16 字节 UUID 二进制 SHA-512 语义不变的前提下，新增 AVX2 四路并行 CPU 后端和 wgpu + WGSL + Vulkan GPU 后端。
 
-**Architecture:** Move candidate encoding and scalar hashing into a library reference implementation. CPU search operates on coarse Rayon chunks and dispatches either scalar or AVX2 x4 hashing; GPU search sends index ranges to a WGSL compute pipeline and reads back only a winning index. Every accelerated result is verified by the scalar implementation.
+架构：将候选 UUID 编码、固定 SHA-512 block 构造和标量参考实现从 main.rs 提取到库模块。CPU 后端按 Rayon 大块搜索，AVX2 每批处理 4 个独立候选；GPU 后端由 WGSL shader 直接从索引生成消息，只回传命中索引。所有加速命中都由标量 sha2 完整复算确认。
 
-**Tech Stack:** Rust 2024, sha2 0.11, Rayon, std::arch AVX2 intrinsics, wgpu 30 Vulkan backend, WGSL with native `u64`, pollster, bytemuck, clap, indicatif.
+技术栈：Rust 2024、sha2 0.11、Rayon、std::arch AVX2、wgpu 30.0.0 Vulkan backend、WGSL u64、pollster、bytemuck、Clap、Indicatif。
+
+约束：不引入 CUDA、OpenCL 或 DirectX 12；默认搜索空间仍为 2^58；当前命令行参数及默认值保持兼容；没有 AVX2 或 Vulkan 时必须可回退到标量后端。
 
 ---
 
-### Task 1: Shared candidate and scalar reference core
+## Task 0：恢复工具链并建立基线
 
-**Files:**
-- Modify: `Cargo.toml`
-- Create: `src/lib.rs`
-- Create: `src/candidate.rs`
-- Create: `src/backend/mod.rs`
-- Create: `src/backend/scalar.rs`
+Files:
+- No source changes.
 
-- [ ] **Step 1: Add candidate encoding tests**
+- [ ] Step 1: 确认本地工具链状态。
 
-Add unit tests asserting that `candidate_bytes(0, 0xeb366895, 0xebac62b9)` is:
+使用固定路径执行：
+    $env:CARGO_HOME = 'C:\Users\Xiao Qing\AppData\Local\Codex\toolchains\xray-qbrute-rust\cargo'
+    $env:RUSTUP_HOME = 'C:\Users\Xiao Qing\AppData\Local\Codex\toolchains\xray-qbrute-rust\rustup'
+    & "$env:CARGO_HOME\bin\rustup.exe" toolchain list
 
-```rust
-[
-    0xeb, 0x36, 0x68, 0x95, 0x00, 0x00, 0x40, 0x00,
-    0x80, 0x00, 0x00, 0x00, 0xeb, 0xac, 0x62, 0xb9,
-]
-```
+期望 stable-x86_64-pc-windows-msvc 可用，并且对应 bin\rustc.exe、bin\cargo.exe 存在。
 
-For indices `0`, `0xffff`, `1 << 16`, `1 << 28`, `1 << 30`, `1 << 42`, and `(1 << 58) - 1`, assert that concatenating `candidate_words(index, commit, suffix)` as big-endian bytes equals `candidate_bytes`.
+- [ ] Step 2: 若工具链不完整，使用 minimal profile 重新安装。
 
-- [ ] **Step 2: Run the tests and confirm the missing module failure**
+安装器必须命名为 rustup-init.exe，避免 rustup 将自定义文件名误识别成代理命令；安装参数为 --no-modify-path --profile minimal --default-toolchain stable。安装目录只使用上述 CARGO_HOME 与 RUSTUP_HOME，不修改系统 PATH。
 
-Run: `cargo test candidate --lib`
+- [ ] Step 3: 运行原始基线检查。
 
-Expected: compilation fails because the library and candidate functions do not exist.
+执行 cargo test --release --all-targets 和 cargo fmt -- --check。期望原始项目编译并通过；如果基线失败，先记录具体错误再修改源代码。
 
-- [ ] **Step 3: Implement the candidate API**
+## Task 1：提取候选编码和标量参考实现
 
-Expose the following API from `src/candidate.rs`:
+Files:
+- Modify: Cargo.toml, src/main.rs.
+- Create: src/lib.rs, src/candidate.rs, src/backend/mod.rs, src/backend/scalar.rs.
 
-```rust
-pub const MAX_UUID_INDEX: u64 = 1u64 << 58;
-pub const DEFAULT_DIFFICULTY_BITS: u32 = 33;
+- [ ] Step 1: 添加候选编码回归测试。
 
-#[derive(Clone, Copy, Debug)]
-pub struct CandidateConfig {
-    pub commit: u32,
-    pub node_suffix: u32,
-}
+测试索引 0、0xffff、1 << 16、1 << 28、1 << 30、1 << 42、(1 << 58) - 1。验证 candidate_bytes 与旧 make_uuid_bytes 的 16 字节结果一致，并验证两个大端 u64 block word 拼接后等于这 16 字节。
 
-pub fn candidate_words(index: u64, config: CandidateConfig) -> [u64; 2];
-pub fn candidate_bytes(index: u64, config: CandidateConfig) -> [u8; 16];
-pub fn bytes_to_uuid_string(bytes: &[u8; 16]) -> String;
-pub fn digest(index: u64, config: CandidateConfig) -> [u8; 64];
-pub fn digest_matches(hash: &[u8; 64], leading_zero_bits: u32) -> bool;
-pub fn digest_word_matches(first_word: u64, leading_zero_bits: u32) -> bool;
-```
+索引 0、默认参数的期望字节：
+    eb 36 68 95 00 00 40 00 80 00 00 00 eb ac 62 b9
 
-`digest_word_matches` accepts `0..=64`, returns true for zero bits, and checks `first_word >> (64 - bits) == 0` otherwise.
+- [ ] Step 2: 实现共享候选 API。
 
-- [ ] **Step 4: Implement coarse scalar search**
+candidate.rs 提供 MAX_UUID_INDEX、DEFAULT_DIFFICULTY_BITS、CandidateConfig、candidate_bytes、candidate_words、digest、digest_word、matches_leading_zero_bits 和 bytes_to_uuid_string。
 
-Create shared result types in `src/backend/mod.rs` and scalar search in `src/backend/scalar.rs`:
+固定 SHA-512 block 必须使用：
+    W0 = commit << 32 | time_mid << 16 | 0x4000 | time_high
+    W1 = variant << 48 | node_prefix << 32 | node_suffix
+    W2 = 0x8000000000000000
+    W3..W14 = 0
+    W15 = 128
 
-```rust
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct BackendHit {
-    pub index: u64,
-}
+- [ ] Step 3: 添加统一搜索类型。
 
-#[derive(Clone, Debug)]
-pub struct BackendOutcome {
-    pub hit: Option<BackendHit>,
-    pub processed: u64,
-    pub backend_name: String,
-}
-```
+backend/mod.rs 定义 SearchHit { index: u64 }、BackendOutcome { hit, processed, backend_name } 和 SearchError { Unavailable, InvalidConfig, Runtime }。
 
-The scalar implementation hashes chunks of 65,536 candidates with Rayon, updates an `AtomicU64` once per completed chunk, and calls a shared progress callback once per chunk.
+- [ ] Step 4: 实现标量参考搜索。
 
-- [ ] **Step 5: Run reference tests**
+scalar.rs 按 65,536 个索引分块，用 Rayon 并行处理。每个候选调用 candidate::digest；命中返回索引；计数只在 block 结束时更新一次，不得在每候选执行全局原子 RMW。
 
-Run: `cargo test --lib candidate backend::scalar`
+- [ ] Step 5: 运行共享核心测试。
 
-Expected: all candidate and scalar tests pass.
+执行 cargo test --release --lib candidate backend::scalar。期望候选边界、block word、摘要条件和标量搜索测试全部通过。
 
-### Task 2: AVX2 four-lane SHA-512 backend
+## Task 2：实现 AVX2 四路 SHA-512
 
-**Files:**
-- Create: `src/backend/avx2.rs`
-- Modify: `src/backend/mod.rs`
-- Test: `src/backend/avx2.rs`
+Files:
+- Create: src/backend/avx2.rs.
+- Modify: src/backend/mod.rs, src/candidate.rs.
 
-- [ ] **Step 1: Add scalar equivalence tests**
+- [ ] Step 1: 先写 AVX2 与标量等价测试。
 
-For 1,024 deterministic four-index batches, compare the four values returned by:
+生成 1,024 组固定四索引批次，比较 AVX2 返回的四个首摘要 word 与四次 candidate::digest 结果。非 x86/x86_64 或不支持 AVX2 时标记跳过。
 
-```rust
-unsafe { first_words_x4_avx2(indices, config) }
-```
+- [ ] Step 2: 实现固定单 block 的 AVX2 核心。
 
-with the first big-endian `u64` from four `candidate::digest` calls. Skip the test only when `is_x86_feature_detected!("avx2")` is false.
+使用 __m256i 表示四个 u64 lane，每个 lane 对应一个独立索引。状态 a..h 使用 SHA-512 IV 广播初始化；消息 schedule 使用 16 项循环数组；W0/W1 从四个索引直接生成，W2..W15 使用固定 padding。
 
-- [ ] **Step 2: Run the test and confirm the missing AVX2 function**
+旋转使用 AVX2 常量移位和 OR，不使用运行时变量移位。完成 80 轮后只累加第一个 IV word，比较 h0 >> 31 == 0，命中 lane 再提取索引；完整摘要由标量路径复算。
 
-Run: `cargo test --release backend::avx2::tests::first_words_match_scalar`
+- [ ] Step 3: 添加运行时特性检查和尾部处理。
 
-Expected: compilation fails because `first_words_x4_avx2` is not implemented.
+提供 is_available 和 search。连续四个索引走 AVX2，最后 1-3 个索引走标量。显式请求 AVX2 但 CPU 不支持时返回 SearchError::Unavailable；auto 才允许回退。
 
-- [ ] **Step 3: Implement fixed-block SHA-512 x4**
+- [ ] Step 4: 验证 AVX2。
 
-Implement `#[target_feature(enable = "avx2")] unsafe fn first_words_x4_avx2` using:
+执行 cargo test --release backend::avx2 -- --nocapture。期望所有四路输出与标量摘要一致，边界索引不会越界。
 
-```rust
-type V = core::arch::x86_64::__m256i;
+## Task 3：实现 WGSL SHA-512 内核
 
-macro_rules! rotr {
-    ($value:expr, $right:literal, $left:literal) => {
-        _mm256_or_si256(
-            _mm256_srli_epi64::<$right>($value),
-            _mm256_slli_epi64::<$left>($value),
-        )
-    };
-}
-```
+Files:
+- Create: src/shaders/sha512_search.wgsl, src/backend/wgpu.rs.
+- Modify: Cargo.toml.
 
-The state is eight broadcast SHA-512 IV vectors. The 16-entry vector schedule starts with lane-wise `W0` and `W1`, fixed padding words, and is expanded in a circular buffer for rounds 16 through 79. After round 79, add only the first IV word to `a`, store four lanes, and return `[u64; 4]`.
+- [ ] Step 1: 添加 GPU 依赖。
 
-- [ ] **Step 4: Implement AVX2 chunk search and runtime guard**
+Cargo.toml 使用 wgpu = { version = "30.0.0", default-features = false, features = ["std", "vulkan", "wgsl"] }、pollster = "1.0.1" 和 bytemuck = { version = "1.25", features = ["derive"] }。删除入口未使用的 itertools、uuid、rand，保留 sha2 作为参考验证实现。
 
-Expose:
+- [ ] Step 2: 实现 WGSL 候选和摘要函数。
 
-```rust
-pub fn is_available() -> bool;
-pub fn search(
-    config: SearchConfig,
-    progress: &ProgressReporter,
-) -> Result<BackendOutcome, SearchError>;
-```
+shader 启用 wgpu_int64，实现 candidate_words(index, commit, suffix) -> vec2<u64> 和 sha512_first_word(index, commit, suffix) -> u64。使用标准 SHA-512 IV、80 个 round constants、16 项循环 schedule；每个 invocation 使用独立的 64 位状态。
 
-Each worker hashes four consecutive indices per loop, checks all four first words, and falls back to scalar hashing for one to three tail indices. Calling the explicit backend without AVX2 returns `SearchError::Unavailable`.
+- [ ] Step 3: 实现 GPU hash-equivalence 测试入口。
 
-- [ ] **Step 5: Verify AVX2**
+测试入口对连续 256 个索引输出第一个摘要 word。Rust 主机创建 storage、readback 和参数 buffer，执行一个 256-thread workgroup，映射读回结果，并与标量摘要逐项比较。
 
-Run: `cargo test --release backend::avx2`
+- [ ] Step 4: 验证 shader 编译和摘要结果。
 
-Expected: all AVX2 equivalence and bounded-search tests pass.
+执行 cargo test --release backend::wgpu::tests::gpu_hashes_match_scalar -- --nocapture。期望选择 NVIDIA RTX 4060 Vulkan adapter，SHADER_INT64 可用，256 个摘要 word 全部一致。
 
-### Task 3: WGSL fixed-message SHA-512 kernel
+## Task 4：实现 wgpu Vulkan 批量搜索
 
-**Files:**
-- Create: `src/shaders/sha512_search.wgsl`
-- Create: `src/backend/wgpu.rs`
-- Modify: `Cargo.toml`
+Files:
+- Modify: src/backend/wgpu.rs, src/shaders/sha512_search.wgsl.
 
-- [ ] **Step 1: Add GPU hash-equivalence test API**
+- [ ] Step 1: 创建 Vulkan adapter 和 compute pipeline。
 
-Add a test that initializes a Vulkan adapter, hashes 256 consecutive indices through a test dispatch, and compares each returned first digest word with the scalar reference. Skip only when Vulkan or `SHADER_INT64` is unavailable.
+使用 wgpu::Backends::VULKAN，选择 PowerPreference::HighPerformance，过滤 fallback adapter，并要求 Features::SHADER_INT64。记录 adapter 名称；显式 wgpu 初始化失败返回 SearchError::Unavailable。
 
-- [ ] **Step 2: Add pinned GPU dependencies**
+- [ ] Step 2: 实现结果 buffer。
 
-Use:
+结果结构使用一个 atomic<u32> 状态和两个 u32 索引 word；命中 invocation 用 atomicCompareExchangeWeak 选出唯一 writer，然后写入索引，无需 64 位原子。
 
-```toml
-wgpu = { version = "30.0.0", default-features = false, features = ["std", "vulkan", "wgsl"] }
-pollster = "1.0.1"
-bytemuck = { version = "1.25", features = ["derive"] }
-```
+- [ ] Step 3: 实现批次 dispatch。
 
-Remove the unused `itertools`, `uuid`, and `rand` dependencies.
+每个 invocation 处理 32 个连续候选；单批最多处理 2^28 个索引。每批清零 result buffer、dispatch、copy 到 mapping buffer、等待完成、读取结果。GPU 不传输候选数组或摘要数组。
 
-- [ ] **Step 3: Implement the WGSL hash function**
+- [ ] Step 4: 添加低难度端到端测试。
 
-The shader declares `enable wgpu_int64;`, uses the 80 standard SHA-512 constants, and exposes:
+内部测试使用 8 个前导零 bit，在前 65,536 个索引内验证 GPU 返回值满足标量摘要条件；不要求 GPU 与 CPU 以相同顺序命中。
 
-```wgsl
-fn candidate_words(index: u64, commit: u32, suffix: u32) -> vec2<u64>;
-fn sha512_first_word(index: u64, commit: u32, suffix: u32) -> u64;
-```
+- [ ] Step 5: 验证 GPU 搜索。
 
-`sha512_first_word` uses a 16-word circular schedule, eight `u64` state variables, and returns the first IV word plus final `a`.
+执行 cargo test --release backend::wgpu::tests::gpu_search_finds_valid_hit -- --nocapture。期望返回索引在搜索范围内，并通过 CPU 完整 SHA-512 复算。
 
-- [ ] **Step 4: Implement a hash-test compute entry point**
+## Task 5：统一搜索 API 和 CLI
 
-The test entry point writes one first digest word per global invocation to a storage buffer. The host test creates configuration, output, and readback buffers, dispatches one 256-thread workgroup, copies the output to the readback buffer, waits for mapping, and compares all outputs.
+Files:
+- Create: src/search.rs.
+- Modify: src/lib.rs.
+- Replace: src/main.rs.
 
-- [ ] **Step 5: Verify the GPU hash implementation**
+- [ ] Step 1: 添加后端枚举和配置。
 
-Run: `cargo test --release backend::wgpu::tests::gpu_hashes_match_scalar -- --nocapture`
+定义 BackendKind { Auto, Scalar, Avx2, Wgpu }、SearchConfig { candidate, max_index, leading_zero_bits }，并提供 search(config, backend, progress) -> Result<BackendOutcome, SearchError>。
 
-Expected: the RTX 4060 Vulkan adapter is selected and all 256 words match.
+- [ ] Step 2: 实现自动选择顺序。
 
-### Task 4: Batched wgpu search backend
+auto 按 wgpu -> avx2 -> scalar 尝试；只在初始化阶段失败时回退。显式 scalar、avx2、wgpu 不得静默换后端。
 
-**Files:**
-- Modify: `src/shaders/sha512_search.wgsl`
-- Modify: `src/backend/wgpu.rs`
-- Test: `src/backend/wgpu.rs`
+- [ ] Step 3: 更新 CLI。
 
-- [ ] **Step 1: Add a reduced-difficulty search test**
+保留 --node-suffix 和 --commit-last8，新增 --backend、--max-index、--no-progress。验证十六进制参数长度和 max_index <= 2^58。命中后用 candidate::digest 完整复算，再保留原有 UUID、/answer、hash[:10]、耗时和速率输出。
 
-Use scalar code to locate a hit at eight leading-zero bits in the first 65,536 indices. Run the GPU backend over the same range and assert its returned index is in range and independently satisfies the eight-bit predicate.
+- [ ] Step 4: 验证 CLI 后端行为。
 
-- [ ] **Step 2: Implement result election in WGSL**
+分别执行：
+    cargo run --release -- --backend scalar --max-index 1048576 --no-progress
+    cargo run --release -- --backend avx2 --max-index 1048576 --no-progress
+    cargo run --release -- --backend wgpu --max-index 1048576 --no-progress
 
-Use a storage result with a `u32` atomic state plus low/high index words. Each invocation processes 32 consecutive candidates. On a match, `atomicCompareExchangeWeak` elects one invocation, which writes the two index words. Every invocation completes its assigned range so batch accounting remains exact.
+期望三个后端完成相同范围；GPU 输出 adapter 名称；AVX2 不可用时显式模式报错、auto 模式回退。
 
-- [ ] **Step 3: Implement host-side batching**
+## Task 6：最终验证和性能烟测
 
-Dispatch at most `2^28` candidates per batch. Clear the result buffer before each dispatch, copy it to a mappable readback buffer after completion, reconstruct the winning index, and update progress by the exact batch length.
+Files:
+- Modify only files required by failed verification.
 
-- [ ] **Step 4: Verify bounded GPU search**
+- [ ] Step 1: 运行 cargo fmt -- --check 和 cargo clippy --all-targets -- -D warnings。期望退出码均为 0，没有 warning。
 
-Run: `cargo test --release backend::wgpu::tests::gpu_search_finds_valid_hit -- --nocapture`
+- [ ] Step 2: 运行 cargo test --release --all-targets。期望标量、AVX2 和可用 Vulkan GPU 测试全部通过。
 
-Expected: the test returns a scalar-verified hit.
+- [ ] Step 3: 三个后端分别运行至少 2^24 个候选，关闭进度条，记录 processed、elapsed 和 M/s。只比较 release 构建，不在没有实测数据时宣称加速倍数。
 
-### Task 5: Backend selection and CLI integration
-
-**Files:**
-- Create: `src/search.rs`
-- Modify: `src/lib.rs`
-- Replace: `src/main.rs`
-
-- [ ] **Step 1: Add backend selection tests**
-
-Test parsing of `auto`, `scalar`, `avx2`, and `wgpu`. Test that explicit unavailable backends return an error and that `auto` tries wgpu, AVX2, then scalar.
-
-- [ ] **Step 2: Implement shared search configuration**
-
-Expose:
-
-```rust
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum BackendKind { Auto, Scalar, Avx2, Wgpu }
-
-#[derive(Clone, Copy, Debug)]
-pub struct SearchConfig {
-    pub candidate: CandidateConfig,
-    pub max_index: u64,
-    pub leading_zero_bits: u32,
-}
-
-pub type ProgressReporter = Arc<dyn Fn(u64) + Send + Sync>;
-pub fn search(config: SearchConfig, backend: BackendKind, progress: ProgressReporter)
-    -> Result<BackendOutcome, SearchError>;
-```
-
-- [ ] **Step 3: Replace the CLI entry point**
-
-Keep the existing arguments and add:
-
-```rust
-#[arg(long, value_enum, default_value_t = BackendArg::Auto)]
-backend: BackendArg,
-
-#[arg(long, default_value_t = MAX_UUID_INDEX)]
-max_index: u64,
-
-#[arg(long, default_value_t = false)]
-no_progress: bool,
-```
-
-Print the selected backend and GPU adapter name. On a hit, recompute the full scalar digest, reject any inconsistent accelerated result, and preserve the existing UUID, answer, hash, time, and rate output.
-
-- [ ] **Step 4: Verify CLI behavior**
-
-Run scalar, AVX2, and wgpu with a bounded range that contains no required 33-bit hit:
-
-```powershell
-cargo run --release -- --backend scalar --max-index 1048576 --no-progress
-cargo run --release -- --backend avx2 --max-index 1048576 --no-progress
-cargo run --release -- --backend wgpu --max-index 1048576 --no-progress
-```
-
-Expected: each backend reports the same completed range without an invalid hit.
-
-### Task 6: Final verification and performance smoke tests
-
-**Files:**
-- Modify only files required by verification findings.
-
-- [ ] **Step 1: Format and lint**
-
-Run:
-
-```powershell
-cargo fmt -- --check
-cargo clippy --all-targets -- -D warnings
-```
-
-Expected: both commands exit successfully with no warnings.
-
-- [ ] **Step 2: Run all release tests**
-
-Run: `cargo test --release --all-targets`
-
-Expected: all CPU and available Vulkan GPU tests pass.
-
-- [ ] **Step 3: Run comparable throughput smoke tests**
-
-Run each backend over at least `2^24` candidates with progress disabled and record processed candidates, elapsed time, and M/s. Do not compare debug builds.
-
-- [ ] **Step 4: Inspect the final diff**
-
-Run:
-
-```powershell
-git diff --check
-git status --short
-git diff --stat HEAD~1
-```
-
-Expected: no whitespace errors, no generated build artifacts, and only the planned source, manifest, lockfile, and documentation changes.
+- [ ] Step 4: 运行 git diff --check、git status --short 和 git diff --stat HEAD~1。期望无空白错误、没有 target 或临时工具文件进入 Git，变更只包含源代码、manifest、lockfile 和设计/计划文档。
