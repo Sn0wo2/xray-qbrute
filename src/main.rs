@@ -1,124 +1,132 @@
+use std::sync::Arc;
+use std::time::Instant;
+
 use clap::Parser;
 use indicatif::{ProgressBar, ProgressStyle};
-use rayon::prelude::*;
-use sha2::{Digest, Sha512};
-use std::sync::atomic::AtomicU64;
-use std::sync::atomic::Ordering;
-use std::time::Instant;
+use xray_qbrute::backend::{ProgressReporter, SearchConfig, SearchError};
+use xray_qbrute::candidate::{self, CandidateConfig, DEFAULT_DIFFICULTY_BITS, MAX_UUID_INDEX};
+use xray_qbrute::search::{self, BackendKind};
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
-    #[arg(long, default_value = "ebac62b9")]
+    #[arg(long, default_value = "ebac62b9", value_name = "HEX8")]
     node_suffix: String,
 
-    #[arg(long, default_value = "eb366895")]
+    #[arg(long, default_value = "eb366895", value_name = "HEX8")]
     commit_last8: String,
+
+    #[arg(long, value_enum, default_value_t = BackendKind::Auto)]
+    backend: BackendKind,
+
+    #[arg(long, default_value_t = MAX_UUID_INDEX, value_name = "COUNT")]
+    max_index: u64,
+
+    #[arg(long)]
+    no_progress: bool,
 }
 
-const MAX_UUID_INDEX: u64 = 1u64 << 58;
-
-#[inline(always)]
-fn make_uuid_bytes(i: u64, bytes: &mut [u8; 16], commit: u32, node_suffix: u32) {
-    let node_prefix = (i & 0xFFFF) as u16;
-    let variant_tail = ((i >> 16) & 0xFFF) as u16;
-    let variant_head = ((i >> 28) & 0x3) as u8;
-    let time_high = ((i >> 30) & 0xFFF) as u16;
-    let time_mid = ((i >> 42) & 0xFFFF) as u16;
-
-    let commit_bytes = commit.to_be_bytes();
-    let suffix_bytes = node_suffix.to_be_bytes();
-
-    bytes[0] = commit_bytes[0];
-    bytes[1] = commit_bytes[1];
-    bytes[2] = commit_bytes[2];
-    bytes[3] = commit_bytes[3];
-    bytes[4] = (time_mid >> 8) as u8;
-    bytes[5] = time_mid as u8;
-    bytes[6] = 0x40 | ((time_high >> 8) as u8);
-    bytes[7] = time_high as u8;
-    bytes[8] = ((8 + variant_head) << 4) | ((variant_tail >> 8) as u8);
-    bytes[9] = variant_tail as u8;
-    bytes[10] = (node_prefix >> 8) as u8;
-    bytes[11] = node_prefix as u8;
-    bytes[12] = suffix_bytes[0];
-    bytes[13] = suffix_bytes[1];
-    bytes[14] = suffix_bytes[2];
-    bytes[15] = suffix_bytes[3];
+fn parse_hex_u32(name: &str, value: &str) -> Result<u32, String> {
+    if value.len() != 8 {
+        return Err(format!(
+            "{name} must contain exactly 8 hexadecimal characters"
+        ));
+    }
+    u32::from_str_radix(value, 16)
+        .map_err(|_| format!("{name} contains a non-hexadecimal character"))
 }
 
-fn bytes_to_uuid_string(bytes: &[u8; 16]) -> String {
-    let mut s = String::with_capacity(36);
-    use std::fmt::Write;
-    write!(
-        &mut s,
-        "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
-        bytes[0], bytes[1], bytes[2], bytes[3],
-        bytes[4], bytes[5],
-        bytes[6], bytes[7],
-        bytes[8], bytes[9],
-        bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15]
-    ).unwrap();
-    s
+fn make_progress_bar(max_index: u64, hidden: bool) -> ProgressBar {
+    if hidden {
+        return ProgressBar::hidden();
+    }
+
+    let progress = ProgressBar::new(max_index);
+    progress.set_style(
+        ProgressStyle::default_bar()
+            .template(
+                "{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({per_sec}) {msg}",
+            )
+            .expect("progress template is static and valid"),
+    );
+    progress
 }
 
-fn main() {
-    let args = Args::parse();
+fn run(args: Args) -> Result<(), SearchError> {
+    let commit =
+        parse_hex_u32("--commit-last8", &args.commit_last8).map_err(SearchError::InvalidConfig)?;
+    let node_suffix =
+        parse_hex_u32("--node-suffix", &args.node_suffix).map_err(SearchError::InvalidConfig)?;
 
-    let commit = u32::from_str_radix(&args.commit_last8, 16).unwrap();
-    let node_suffix = u32::from_str_radix(&args.node_suffix, 16).unwrap();
+    let candidate = CandidateConfig {
+        commit,
+        node_suffix,
+    };
+    let config = SearchConfig {
+        candidate,
+        max_index: args.max_index,
+        leading_zero_bits: DEFAULT_DIFFICULTY_BITS,
+    };
 
     println!("===== xray-qbrute =====");
     println!("Threads: {}", rayon::current_num_threads());
     println!("COMMIT_LAST8: {}", args.commit_last8);
     println!("NODE_SUFFIX: {}", args.node_suffix);
+    println!("Backend request: {}", args.backend);
+    println!("Range: [0, {})", config.max_index);
 
-    let attempts = AtomicU64::new(0);
+    let progress_bar = make_progress_bar(config.max_index, args.no_progress);
+    let callback_bar = progress_bar.clone();
+    let progress: ProgressReporter = Arc::new(move |count| callback_bar.inc(count));
     let start = Instant::now();
+    let outcome = search::search(&config, args.backend, progress)?;
+    let elapsed = start.elapsed();
 
-    let pb = ProgressBar::new(MAX_UUID_INDEX);
-    pb.set_style(
-        ProgressStyle::default_bar()
-            .template(
-                "{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({per_sec}) {msg}",
-            )
-            .unwrap(),
-    );
+    for reason in &outcome.fallback_reasons {
+        eprintln!("backend fallback: {reason}");
+    }
 
-    let result = (0u64..MAX_UUID_INDEX)
-        .into_par_iter()
-        .map(|i| {
-            let count = attempts.fetch_add(1, Ordering::Relaxed) + 1;
+    if let Some(device) = &outcome.device_name {
+        println!("Device: {device}");
+    }
+    println!("Backend: {}", outcome.backend_name);
+    let speed = outcome.processed as f64 / elapsed.as_secs_f64().max(f64::EPSILON) / 1e6;
 
-            if count & 0xFFFFF == 0 {
-                pb.set_position(count);
-            }
+    if let Some(hit) = outcome.hit {
+        let bytes = candidate::candidate_bytes(hit.index, config.candidate);
+        let hash = candidate::digest(hit.index, config.candidate);
+        let first_word = candidate::digest_word(&hash);
+        if !candidate::matches_leading_zero_bits(first_word, config.leading_zero_bits) {
+            return Err(SearchError::Runtime(format!(
+                "backend returned an invalid hit at index {}",
+                hit.index
+            )));
+        }
 
-            let mut buf = [0u8; 16];
-            make_uuid_bytes(i, &mut buf, commit, node_suffix);
-            let hash = Sha512::digest(buf);
-
-            (buf, hash, count)
-        })
-        .find_any(|(_, hash, _)| {
-            hash[0] == 0 && hash[1] == 0 && hash[2] == 0 && hash[3] == 0 && (hash[4] & 0x80) == 0
-        });
-
-    if let Some((bytes, hash, count)) = result {
-        let elapsed = start.elapsed();
-        let speed = count as f64 / elapsed.as_secs_f64() / 1e6;
-        let uuid = bytes_to_uuid_string(&bytes);
-
+        let uuid = candidate::bytes_to_uuid_string(&bytes);
         println!("\n===== FOUND =====");
-        println!("UUID      : {}", uuid);
-        println!("answer    : /answer {}", uuid);
+        println!("UUID      : {uuid}");
+        println!("answer    : /answer {uuid}");
         println!("hash[:10] : {}", hex::encode(&hash[..10]));
-        println!("attempts  : {}", count);
+        println!("attempts  : {}", outcome.processed);
         println!("time      : {:.2}s", elapsed.as_secs_f64());
-        println!("rate      : {:.1} M/s", speed);
-
-        pb.finish_with_message("Found!");
+        println!("rate      : {speed:.1} M/s");
+        progress_bar.finish_with_message("Found!");
     } else {
-        pb.finish_with_message("Not found in 2^58 range");
+        println!("\n===== NOT FOUND =====");
+        println!("searched  : {} candidates", outcome.processed);
+        println!("time      : {:.2}s", elapsed.as_secs_f64());
+        println!("rate      : {speed:.1} M/s");
+        progress_bar.finish_with_message("Not found");
+    }
+
+    Ok(())
+}
+
+fn main() {
+    let args = Args::parse();
+    if let Err(error) = run(args) {
+        eprintln!("error: {error}");
+        std::process::exit(2);
     }
 }
