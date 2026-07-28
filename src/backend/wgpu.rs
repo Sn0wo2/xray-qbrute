@@ -73,7 +73,7 @@ pub fn search(
             let index = (u64::from(result.index_hi) << 32) | u64::from(result.index_lo);
             if index < base || index >= base + batch_count {
                 return Err(SearchError::Runtime(format!(
-                    "Vulkan shader returned index {index} outside batch [{base}, {})",
+                    "GPU shader returned index {index} outside batch [{base}, {})",
                     base + batch_count
                 )));
             }
@@ -87,10 +87,21 @@ pub fn search(
     Ok(BackendOutcome {
         hit,
         processed,
-        backend_name: "wgpu-vulkan".to_owned(),
+        backend_name: selected_backend().0.to_owned(),
         device_name: Some(context.adapter_name),
         fallback_reasons: Vec::new(),
     })
+}
+
+fn selected_backend() -> (&'static str, wgpu::Backends) {
+    #[cfg(target_os = "macos")]
+    {
+        ("wgpu-metal", wgpu::Backends::METAL)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        ("wgpu-vulkan", wgpu::Backends::VULKAN)
+    }
 }
 
 fn create_context() -> Result<GpuContext, SearchError> {
@@ -98,8 +109,9 @@ fn create_context() -> Result<GpuContext, SearchError> {
 }
 
 async fn create_context_async() -> Result<GpuContext, SearchError> {
+    let (backend_name, backends) = selected_backend();
     let mut instance_descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
-    instance_descriptor.backends = wgpu::Backends::VULKAN;
+    instance_descriptor.backends = backends;
     let instance = wgpu::Instance::new(instance_descriptor);
 
     let adapter = instance
@@ -111,27 +123,28 @@ async fn create_context_async() -> Result<GpuContext, SearchError> {
         })
         .await
         .map_err(|error| {
-            SearchError::Unavailable(format!("Vulkan adapter request failed: {error}"))
+            SearchError::Unavailable(format!("{backend_name} adapter request failed: {error}"))
         })?;
     let info = adapter.get_info();
     let required_feature = wgpu::Features::SHADER_INT64;
     if !adapter.features().contains(required_feature) {
         return Err(SearchError::Unavailable(format!(
-            "Vulkan adapter {} does not expose SHADER_INT64",
+            "{backend_name} adapter {} does not expose SHADER_INT64",
             info.name
         )));
     }
 
+    let device_label = format!("xray-qbrute {backend_name} device");
     let (device, queue) = adapter
         .request_device(&wgpu::DeviceDescriptor {
-            label: Some("xray-qbrute Vulkan device"),
+            label: Some(&device_label),
             required_features: required_feature,
             required_limits: adapter.limits(),
             ..Default::default()
         })
         .await
         .map_err(|error| {
-            SearchError::Unavailable(format!("Vulkan device request failed: {error}"))
+            SearchError::Unavailable(format!("{backend_name} device request failed: {error}"))
         })?;
 
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -289,7 +302,12 @@ impl GpuContext {
         encoder.copy_buffer_to_buffer(&buffers.result, 0, &buffers.readback, 0, SEARCH_RESULT_SIZE);
         self.queue.submit(Some(encoder.finish()));
 
-        let bytes = readback(&self.device, &buffers.readback, SEARCH_RESULT_SIZE)?;
+        let bytes = readback(
+            &self.device,
+            &buffers.readback,
+            SEARCH_RESULT_SIZE,
+            selected_backend().0,
+        )?;
         Ok(bytemuck::pod_read_unaligned(&bytes))
     }
 
@@ -354,7 +372,12 @@ impl GpuContext {
         encoder.copy_buffer_to_buffer(&output, 0, &readback_buffer, 0, output_size);
         self.queue.submit(Some(encoder.finish()));
 
-        let bytes = readback(&self.device, &readback_buffer, output_size)?;
+        let bytes = readback(
+            &self.device,
+            &readback_buffer,
+            output_size,
+            selected_backend().0,
+        )?;
         Ok(bytemuck::cast_slice(&bytes).to_vec())
     }
 }
@@ -381,6 +404,7 @@ fn readback(
     device: &wgpu::Device,
     buffer: &wgpu::Buffer,
     size: u64,
+    backend_name: &str,
 ) -> Result<Vec<u8>, SearchError> {
     let slice = buffer.slice(0..size);
     let (sender, receiver) = std::sync::mpsc::channel();
@@ -389,16 +413,16 @@ fn readback(
     });
     device
         .poll(wgpu::PollType::wait_indefinitely())
-        .map_err(|error| SearchError::Runtime(format!("Vulkan device poll failed: {error}")))?;
+        .map_err(|error| SearchError::Runtime(format!("{backend_name} device poll failed: {error}")))?;
     let map_result = receiver
         .recv()
-        .map_err(|error| SearchError::Runtime(format!("Vulkan map callback failed: {error}")))?;
+        .map_err(|error| SearchError::Runtime(format!("{backend_name} map callback failed: {error}")))?;
     map_result
-        .map_err(|error| SearchError::Runtime(format!("Vulkan readback map failed: {error}")))?;
+        .map_err(|error| SearchError::Runtime(format!("{backend_name} readback map failed: {error}")))?;
 
     let view = slice
         .get_mapped_range()
-        .map_err(|error| SearchError::Runtime(format!("Vulkan mapped range failed: {error}")))?;
+        .map_err(|error| SearchError::Runtime(format!("{backend_name} mapped range failed: {error}")))?;
     let bytes = view.to_vec();
     drop(view);
     buffer.unmap();
@@ -420,10 +444,10 @@ mod tests {
         match create_context() {
             Ok(context) => Some(context),
             Err(SearchError::Unavailable(reason)) => {
-                eprintln!("Skipping Vulkan test: {reason}");
+                eprintln!("Skipping GPU test: {reason}");
                 None
             }
-            Err(error) => panic!("Vulkan initialization failed unexpectedly: {error}"),
+            Err(error) => panic!("GPU initialization failed unexpectedly: {error}"),
         }
     }
 
@@ -435,7 +459,7 @@ mod tests {
 
         let actual = context
             .hash_first_words(0, 256, CONFIG)
-            .expect("Vulkan hash readback must succeed");
+            .expect("GPU hash readback must succeed");
         assert_eq!(actual.len(), 256);
         for (offset, &actual_word) in actual.iter().enumerate() {
             let index = offset as u64;
@@ -456,10 +480,10 @@ mod tests {
         let outcome = match search(&config, &progress) {
             Ok(outcome) => outcome,
             Err(SearchError::Unavailable(reason)) => {
-                eprintln!("Skipping Vulkan test: {reason}");
+                eprintln!("Skipping GPU test: {reason}");
                 return;
             }
-            Err(error) => panic!("Vulkan search failed unexpectedly: {error}"),
+            Err(error) => panic!("GPU search failed unexpectedly: {error}"),
         };
         let hit = outcome
             .hit
