@@ -19,8 +19,13 @@ struct Args {
     )]
     node_suffix: String,
 
-    #[arg(long, default_value = "eb366895", value_name = "HEX8")]
-    commit_last8: String,
+    #[arg(
+        long,
+        default_value = "eb366895",
+        value_name = "HEX8",
+        help = "Commit hash (8 hex characters)"
+    )]
+    commit: String,
 
     #[arg(long, value_enum, default_value_t = BackendKind::Auto)]
     backend: BackendKind,
@@ -90,8 +95,7 @@ fn format_integer(value: u64) -> String {
 }
 
 fn run(args: Args) -> Result<(), SearchError> {
-    let commit =
-        parse_hex_u32("--commit-last8", &args.commit_last8).map_err(SearchError::InvalidConfig)?;
+    let commit = parse_hex_u32("--commit", &args.commit).map_err(SearchError::InvalidConfig)?;
     let node_suffix =
         parse_hex_u32("node-suffix", &args.node_suffix).map_err(SearchError::InvalidConfig)?;
 
@@ -108,7 +112,7 @@ fn run(args: Args) -> Result<(), SearchError> {
 
     println!("===== xray-qbrute =====");
     println!("Threads: {}", rayon::current_num_threads());
-    println!("COMMIT_LAST8: {}", args.commit_last8);
+    println!("COMMIT: {}", args.commit);
     println!("NODE_SUFFIX: {}", args.node_suffix);
     println!("Backend request: {}", args.backend);
     println!(

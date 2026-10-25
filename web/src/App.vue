@@ -80,7 +80,7 @@ async function copyAnswer() {
 
           <div class="field-grid">
             <div class="field">
-              <span class="field-label">Commit last 8</span>
+              <span class="field-label">Commit hash</span>
               <el-input v-model="form.commit" maxlength="8" pattern="[0-9a-fA-F]{8}" required spellcheck="false" :disabled="running" />
               <span class="field-hint">Required · 8 hex characters</span>
             </div>
