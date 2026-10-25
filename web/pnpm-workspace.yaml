@@ -9,3 +9,4 @@ minimumReleaseAgeExclude:
 
 overrides:
   '@napi-rs/wasm-runtime': 1.2.1
+  source-map-js: 1.2.2

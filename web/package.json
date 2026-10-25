@@ -7,28 +7,23 @@
     "build": "vue-tsc --noEmit && vite build",
     "preview": "vite preview"
   },
-  "pnpm": {
-    "onlyBuiltDependencies": [
-      "esbuild"
-    ]
-  },
   "dependencies": {
     "@m234/nerd-fonts": "^0.5.2",
-    "@vueuse/core": "^14.4.0",
+    "@vueuse/core": "^15.0.0",
     "coi-serviceworker": "^0.1.7",
-    "element-plus": "^2.14.3",
-    "vue": "^3.5.41"
+    "element-plus": "^2.14.7",
+    "vue": "^3.5.44"
   },
   "devDependencies": {
-    "@types/node": "^26.1.2",
-    "@vitejs/plugin-vue": "^6.0.8",
-    "esbuild": "^0.28.1",
-    "prettier": "^3.9.6",
-    "sass": "^1.102.0",
-    "typescript": "^6.0.3",
+    "@types/node": "^26.6.5",
+    "@vitejs/plugin-vue": "^6.0.10",
+    "esbuild": "^0.28.2",
+    "prettier": "^3.9.10",
+    "sass": "^1.106.1",
+    "typescript": "~6.0.3",
     "unplugin-auto-import": "^21.1.0",
     "unplugin-vue-components": "^32.1.0",
-    "vite": "^8.2.1",
-    "vue-tsc": "^3.3.9"
+    "vite": "^8.3.5",
+    "vue-tsc": "^3.3.13"
   }
 }
