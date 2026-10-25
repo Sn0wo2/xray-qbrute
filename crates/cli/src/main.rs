@@ -56,21 +56,6 @@ fn parse_hex_u32(name: &str, value: &str) -> Result<u32, String> {
         .map_err(|_| format!("{name} contains a non-hexadecimal character"))
 }
 
-fn make_progress_bar(hidden: bool) -> ProgressBar {
-    if hidden {
-        return ProgressBar::hidden();
-    }
-
-    // The bar's fill represents P(hit in range), not raw scan position.
-    let progress = ProgressBar::new(1000);
-    progress.set_style(
-        ProgressStyle::default_bar()
-            .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {msg}")
-            .expect("progress template is static and valid"),
-    );
-    progress
-}
-
 fn format_rate(rate_per_second: f64) -> String {
     const UNITS: [&str; 5] = ["H/s", "kH/s", "MH/s", "GH/s", "TH/s"];
     let mut value = rate_per_second;
@@ -123,7 +108,18 @@ fn run(args: Args) -> Result<(), SearchError> {
     let processed_total = Arc::new(AtomicU64::new(0));
 
     let prepared = search::prepare(&config, args.backend)?;
-    let progress_bar = make_progress_bar(args.no_progress);
+    let progress_bar = if args.no_progress {
+        ProgressBar::hidden()
+    } else {
+        // The bar's fill represents P(hit in range), not raw scan position.
+        let bar = ProgressBar::new(1000);
+        bar.set_style(
+            ProgressStyle::default_bar()
+                .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {msg}")
+                .expect("progress template is static and valid"),
+        );
+        bar
+    };
     let callback_bar = progress_bar.clone();
     let callback_total = Arc::clone(&processed_total);
     let callback_start = Instant::now();

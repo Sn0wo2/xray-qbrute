@@ -58,17 +58,13 @@ pub(crate) fn result_details(commit: u32, node_suffix: u32, index: u64) -> (Stri
     };
     let uuid = candidate::bytes_to_uuid_string(&candidate::candidate_bytes(index, config));
     let hash = candidate::digest(index, config);
-    (uuid, hex_prefix(&hash[..10]))
-}
-
-fn hex_prefix(bytes: &[u8]) -> String {
-    const DIGITS: &[u8; 16] = b"0123456789abcdef";
-    let mut output = String::with_capacity(bytes.len() * 2);
-    for &byte in bytes {
-        output.push(char::from(DIGITS[usize::from(byte >> 4)]));
-        output.push(char::from(DIGITS[usize::from(byte & 0x0f)]));
+    let digits = b"0123456789abcdef";
+    let mut hash_prefix = String::with_capacity(20);
+    for &byte in &hash[..10] {
+        hash_prefix.push(char::from(digits[usize::from(byte >> 4)]));
+        hash_prefix.push(char::from(digits[usize::from(byte & 0x0f)]));
     }
-    output
+    (uuid, hash_prefix)
 }
 
 #[cfg(all(feature = "wasm-simd", target_family = "wasm"))]

@@ -58,18 +58,9 @@ pub struct CudaSearchSession {
     leading_zero_bits: u32,
 }
 
-pub fn search(
-    config: &SearchConfig,
-    progress: &ProgressReporter,
-) -> Result<BackendOutcome, SearchError> {
-    let session = CudaSearchSession::new(*config)?;
-    session.warm_up()?;
-    session.search(config, progress)
-}
-
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 fn locate_cuda_bin_dir() -> Option<PathBuf> {
-    let mut roots: Vec<PathBuf> = Vec::new();
+    let mut roots = Vec::new();
 
     for key in ["CUDA_PATH", "CUDA_HOME"] {
         if let Ok(path) = std::env::var(key) {
@@ -109,7 +100,7 @@ fn locate_cuda_bin_dir() -> Option<PathBuf> {
         }
     }
 
-    let mut probes: Vec<PathBuf> = Vec::new();
+    let mut probes = Vec::new();
     for root in roots {
         probes.push(root.clone());
         #[cfg(target_os = "windows")]
@@ -339,8 +330,7 @@ impl CudaSearchSession {
                 SearchError::Runtime(format!("CUDA result buffer init failed: {error:?}"))
             })?;
 
-        let total_candidates = candidate_count as u32;
-        let threads_needed = total_candidates.div_ceil(CANDIDATES_PER_INVOCATION);
+        let threads_needed = (candidate_count as u32).div_ceil(CANDIDATES_PER_INVOCATION);
         let blocks = threads_needed.div_ceil(BLOCK_SIZE);
         let cfg = LaunchConfig {
             grid_dim: (blocks.max(1), 1, 1),

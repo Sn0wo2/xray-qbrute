@@ -78,7 +78,15 @@ pub fn install_coordinator() -> Result<(), JsValue> {
 
 impl Controller {
     async fn run(&self, request: SearchRequest) -> Result<(), String> {
-        validate_request(request)?;
+        if request.max_index == 0 || request.max_index > crate::candidate::MAX_UUID_INDEX {
+            return Err("maximum index must be between 1 and 2^58".to_owned());
+        }
+        if request.difficulty > 64 {
+            return Err("difficulty must be between 0 and 64".to_owned());
+        }
+        if request.threads == 0 || request.threads > 256 {
+            return Err("threads must be between 1 and 256".to_owned());
+        }
         let mut fallbacks = Vec::new();
         let backend = match request.backend {
             #[cfg(feature = "wasm-webgpu")]
@@ -222,19 +230,6 @@ impl Controller {
             web_sys::console::debug_1(&format!("[wasm] {message}").into());
         }
     }
-}
-
-fn validate_request(request: SearchRequest) -> Result<(), String> {
-    if request.max_index == 0 || request.max_index > crate::candidate::MAX_UUID_INDEX {
-        return Err("maximum index must be between 1 and 2^58".to_owned());
-    }
-    if request.difficulty > 64 {
-        return Err("difficulty must be between 0 and 64".to_owned());
-    }
-    if request.threads == 0 || request.threads > 256 {
-        return Err("threads must be between 1 and 256".to_owned());
-    }
-    Ok(())
 }
 
 fn backend_name(backend: BackendRequest) -> &'static str {

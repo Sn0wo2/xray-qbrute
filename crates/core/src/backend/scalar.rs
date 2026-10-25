@@ -12,7 +12,7 @@ pub fn search(config: &SearchConfig, progress: &ProgressReporter) -> BackendOutc
         let end = (start + SEARCH_CHUNK_SIZE).min(config.max_index);
         let chunk_size = end - start;
 
-        let min_index: Option<u64> = (start..end)
+        let min_index = (start..end)
             .into_par_iter()
             .filter_map(|i| {
                 let hash = candidate::digest(i, config.candidate);

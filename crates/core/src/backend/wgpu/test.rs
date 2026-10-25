@@ -186,7 +186,10 @@ fn browser_webgpu_shader_matches_scalar_minimums() {
             bind_group_layouts: &[Some(&layout)],
             immediate_size: 0,
         });
-    let kernel = KernelConfig::new(128, 8);
+    let kernel = KernelConfig {
+        workgroup_size: 128,
+        candidates_per_invocation: 8,
+    };
     let buffers = create_search_buffers(&context.device, &layout);
 
     for candidate_config in [CONFIG, ALTERNATE_CONFIG] {

@@ -7,7 +7,6 @@ use crate::candidate::CandidateConfig;
 
 use super::{BackendOutcome, ProgressReporter, SearchConfig, SearchError, SearchHit};
 
-const WARM_UP_CANDIDATES: u64 = 1 << 20;
 const MAX_BATCH: u64 = 1 << 28;
 const SEARCH_RESULT_SIZE: u64 = std::mem::size_of::<GpuResult>() as u64;
 const TUNING_DIFFICULTY_BITS: u32 = 64;
@@ -39,13 +38,6 @@ struct KernelConfig {
 }
 
 impl KernelConfig {
-    const fn new(workgroup_size: u32, candidates_per_invocation: u32) -> Self {
-        Self {
-            workgroup_size,
-            candidates_per_invocation,
-        }
-    }
-
     fn candidates_per_workgroup(self) -> u64 {
         u64::from(self.workgroup_size) * u64::from(self.candidates_per_invocation)
     }
@@ -58,25 +50,11 @@ pub enum WgpuBackend {
 }
 
 impl WgpuBackend {
-    fn backends(self) -> wgpu::Backends {
-        match self {
-            Self::Vulkan => wgpu::Backends::VULKAN,
-            Self::Metal => wgpu::Backends::METAL,
-        }
-    }
-
     fn name(self) -> &'static str {
         match self {
             Self::Vulkan => "wgpu-vulkan",
             Self::Metal => "wgpu-metal",
         }
-    }
-
-    fn matches(self, actual: wgpu::Backend) -> bool {
-        matches!(
-            (self, actual),
-            (Self::Vulkan, wgpu::Backend::Vulkan) | (Self::Metal, wgpu::Backend::Metal)
-        )
     }
 }
 
@@ -134,14 +112,14 @@ impl WgpuSearchSession {
     pub fn new(selected_backend: WgpuBackend, config: SearchConfig) -> Result<Self, SearchError> {
         let context = create_context(selected_backend, config)?;
         context.verify_sha512(config.candidate)?;
-        let buffers = context.create_search_buffers();
+        let buffers = create_search_buffers(&context.device, &context.search_bind_group_layout);
 
         Ok(Self { context, buffers })
     }
 
     pub fn warm_up(&self) -> Result<(), SearchError> {
         self.context
-            .run_search_batch(&self.buffers, 0, WARM_UP_CANDIDATES)
+            .run_search_batch(&self.buffers, 0, 1 << 20)
             .map(|_| ())
     }
 
@@ -227,7 +205,10 @@ async fn create_context_async(
 ) -> Result<GpuContext, SearchError> {
     let backend_name = selected_backend.name();
     let mut instance_descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
-    instance_descriptor.backends = selected_backend.backends();
+    instance_descriptor.backends = match selected_backend {
+        WgpuBackend::Vulkan => wgpu::Backends::VULKAN,
+        WgpuBackend::Metal => wgpu::Backends::METAL,
+    };
     let instance = wgpu::Instance::new(instance_descriptor);
 
     let adapter = instance
@@ -242,7 +223,10 @@ async fn create_context_async(
             SearchError::Unavailable(format!("{backend_name} adapter request failed: {error}"))
         })?;
     let info = adapter.get_info();
-    if !selected_backend.matches(info.backend) {
+    if !matches!(
+        (selected_backend, info.backend),
+        (WgpuBackend::Vulkan, wgpu::Backend::Vulkan) | (WgpuBackend::Metal, wgpu::Backend::Metal)
+    ) {
         return Err(SearchError::Unavailable(format!(
             "{backend_name} requested but adapter {} uses {:?}",
             info.name, info.backend
@@ -577,8 +561,13 @@ fn tune_kernel(
 
     for workgroup_size in TUNING_WORKGROUP_SIZES {
         for candidates_per_invocation in TUNING_CANDIDATES_PER_INVOCATION {
-            let config = KernelConfig::new(workgroup_size, candidates_per_invocation);
-            if !kernel_supported(config, &limits) {
+            let config = KernelConfig {
+                workgroup_size,
+                candidates_per_invocation,
+            };
+            if config.workgroup_size > limits.max_compute_invocations_per_workgroup
+                || config.workgroup_size > limits.max_compute_workgroup_size_x
+            {
                 continue;
             }
             configs.push(config);
@@ -592,7 +581,17 @@ fn tune_kernel(
     }
     let mut variants = compile_kernel_variants(device, shader, pipeline_layout, cache, &configs)?;
     for variant in &variants {
-        warm_kernel_variant(device, queue, &buffers, variant, backend_name)?;
+        let result = run_search_pipeline(
+            device,
+            queue,
+            &variant.pipeline,
+            variant.config,
+            &buffers,
+            0,
+            TUNING_WARMUP_CANDIDATES,
+            backend_name,
+        )?;
+        validate_tuning_result(result, TUNING_WARMUP_CANDIDATES, variant.config)?;
     }
     benchmark_kernel_variants(
         device,
@@ -608,11 +607,6 @@ fn tune_kernel(
         .min_by_key(|variant| variant.elapsed)
         .map(|variant| variant.config)
         .ok_or_else(|| SearchError::Runtime("kernel tuner produced no result".to_owned()))
-}
-
-fn kernel_supported(config: KernelConfig, limits: &wgpu::Limits) -> bool {
-    config.workgroup_size <= limits.max_compute_invocations_per_workgroup
-        && config.workgroup_size <= limits.max_compute_workgroup_size_x
 }
 
 fn compile_kernel_variants(
@@ -660,26 +654,6 @@ fn compile_kernel_variants(
             })
             .collect()
     })
-}
-
-fn warm_kernel_variant(
-    device: &wgpu::Device,
-    queue: &wgpu::Queue,
-    buffers: &SearchBuffers,
-    variant: &KernelVariant,
-    backend_name: &str,
-) -> Result<(), SearchError> {
-    let result = run_search_pipeline(
-        device,
-        queue,
-        &variant.pipeline,
-        variant.config,
-        buffers,
-        0,
-        TUNING_WARMUP_CANDIDATES,
-        backend_name,
-    )?;
-    validate_tuning_result(result, TUNING_WARMUP_CANDIDATES, variant.config)
 }
 
 fn benchmark_kernel_variants(
@@ -745,10 +719,6 @@ fn validate_tuning_result(
 }
 
 impl GpuContext {
-    fn create_search_buffers(&self) -> SearchBuffers {
-        create_search_buffers(&self.device, &self.search_bind_group_layout)
-    }
-
     fn run_search_batch(
         &self,
         buffers: &SearchBuffers,
