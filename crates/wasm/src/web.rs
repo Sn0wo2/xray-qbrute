@@ -1,7 +1,7 @@
 use wasm_bindgen::prelude::*;
 
 use crate::candidate::{self, CandidateConfig, MAX_UUID_INDEX};
-#[cfg(feature = "wasm-simd")]
+#[cfg(all(feature = "wasm-simd", target_family = "wasm"))]
 use crate::sha512_constants::{IV, ROUND_CONSTANTS};
 
 #[cfg(feature = "wasm-controller")]
@@ -35,7 +35,7 @@ pub(crate) fn search_scalar_batch(
         .unwrap_or(u64::MAX)
 }
 
-#[cfg(feature = "wasm-simd")]
+#[cfg(all(feature = "wasm-simd", target_family = "wasm"))]
 pub(crate) fn search_simd_batch(
     commit: u32,
     node_suffix: u32,
@@ -71,7 +71,7 @@ fn hex_prefix(bytes: &[u8]) -> String {
     output
 }
 
-#[cfg(feature = "wasm-simd")]
+#[cfg(all(feature = "wasm-simd", target_family = "wasm"))]
 fn search_simd_range(base: u64, end: u64, config: CandidateConfig, bits: u32) -> Option<u64> {
     let vector_end = end - (end - base) % 2;
     let mut index = base;
@@ -93,7 +93,7 @@ fn scalar_matches(index: u64, config: CandidateConfig, bits: u32) -> bool {
     candidate::matches_leading_zero_bits(word, bits)
 }
 
-#[cfg(feature = "wasm-simd")]
+#[cfg(all(feature = "wasm-simd", target_family = "wasm"))]
 #[target_feature(enable = "simd128")]
 fn simd_words(indices: [u64; 2], config: CandidateConfig) -> [u64; 2] {
     use core::arch::wasm32::*;

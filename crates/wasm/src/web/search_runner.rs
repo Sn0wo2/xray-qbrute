@@ -44,7 +44,7 @@ impl Controller {
                             task_count,
                             request.difficulty,
                         ),
-                        #[cfg(feature = "wasm-simd")]
+                        #[cfg(all(feature = "wasm-simd", target_family = "wasm"))]
                         CpuKernel::Simd => super::search_simd_batch(
                             request.commit,
                             request.node_suffix,
@@ -52,7 +52,7 @@ impl Controller {
                             task_count,
                             request.difficulty,
                         ),
-                        #[cfg(not(feature = "wasm-simd"))]
+                        #[cfg(not(all(feature = "wasm-simd", target_family = "wasm")))]
                         CpuKernel::Simd => return None,
                     };
                     (hit != u64::MAX).then_some(hit)
@@ -156,6 +156,7 @@ impl Controller {
         });
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn finish(
         &self,
         request: SearchRequest,

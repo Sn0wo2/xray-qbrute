@@ -17,7 +17,7 @@ pub(super) struct Controller {
     cancelled: Rc<Cell<bool>>,
     debug_enabled: Rc<Cell<bool>>,
     #[cfg(feature = "wasm-webgpu")]
-    gpu_session: Rc<RefCell<Option<(GpuKey, Rc<GpuSession>)>>>,
+    gpu_session: Rc<RefCell<Option<GpuCacheEntry>>>,
 }
 
 #[cfg(feature = "wasm-webgpu")]
@@ -27,6 +27,9 @@ struct GpuKey {
     node_suffix: u32,
     difficulty: u32,
 }
+
+#[cfg(feature = "wasm-webgpu")]
+type GpuCacheEntry = (GpuKey, Rc<GpuSession>);
 
 #[wasm_bindgen]
 pub fn install_coordinator() -> Result<(), JsValue> {
@@ -188,11 +191,11 @@ impl Controller {
             node_suffix: request.node_suffix,
             difficulty: request.difficulty,
         };
-        if let Some((cached_key, session)) = self.gpu_session.borrow().as_ref() {
-            if *cached_key == key {
-                self.debug("reusing cached WebGPU session");
-                return Ok(Rc::clone(session));
-            }
+        if let Some((cached_key, session)) = self.gpu_session.borrow().as_ref()
+            && *cached_key == key
+        {
+            self.debug("reusing cached WebGPU session");
+            return Ok(Rc::clone(session));
         }
         self.debug("creating WebGPU session");
         let session = Rc::new(GpuSession::new(request).await?);
