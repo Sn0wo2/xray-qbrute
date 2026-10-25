@@ -15,7 +15,7 @@ clap.workspace = true
 indicatif.workspace = true
 hex.workspace = true
 rayon.workspace = true
-ctrlc = "3.4.5"
+ctrlc = "3.5.2"
 
 [features]
 default = ["scalar", "avx2", "wgpu", "cuda"]
