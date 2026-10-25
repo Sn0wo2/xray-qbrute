@@ -2,26 +2,155 @@ name: CI
 
 on:
   push:
-    branches: ['*']
+    branches: [main, master]
   pull_request:
-    branches: ['*']
+  workflow_dispatch:
 
-permissions:
-  contents: read
+permissions: {}
 
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
-  lint:
-    name: Lint
-    uses: ./.github/workflows/lint.yml
+  check:
+    name: Checks
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      autofix: ${{ steps.patch.outputs.changed }}
+      has_binaries: ${{ steps.metadata.outputs.has_binaries }}
+      has_library: ${{ steps.metadata.outputs.has_library }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
-  test:
-    name: Test
-    uses: ./.github/workflows/test.yml
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: clippy,rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: check
+          cache-workspace-crates: true
+          save-if: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+
+      - uses: actions/github-script@v9
+        id: metadata
+        with:
+          script: |
+            const { packages } = JSON.parse(
+              (await exec.getExecOutput("cargo", ["metadata", "--no-deps", "--format-version", "1"], { silent: true })).stdout,
+            )
+            core.setOutput("has_binaries", packages.some((pkg) => pkg.targets.some((target) => target.kind.includes("bin"))))
+            core.setOutput("has_library", packages.some((pkg) => pkg.targets.some((target) => target.kind.includes("lib"))))
+
+      - name: Apply lint fixes
+        continue-on-error: true
+        run: make lint-fix
+
+      - name: Save lint fixes
+        id: patch
+        if: ${{ !cancelled() }}
+        run: |
+          if ! git diff --quiet -- '*.rs'; then
+            git diff --binary -- '*.rs' > "$RUNNER_TEMP/lint-fixes.patch"
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            git restore --worktree -- '*.rs'
+          fi
+
+      - uses: actions/upload-artifact@v7
+        if: ${{ !cancelled() && steps.patch.outputs.changed == 'true' }}
+        with:
+          name: lint-fixes
+          path: ${{ runner.temp }}/lint-fixes.patch
+          retention-days: 7
+          if-no-files-found: error
+
+      - run: make lint check check-no-default test test-all test-no-default doc
+
+      - uses: EmbarkStudios/cargo-deny-action@v2
+
+  autofix:
+    needs: check
+    if: >-
+      !cancelled() && needs.check.outputs.autofix == 'true' &&
+      (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.head_ref || github.ref_name }}
+          persist-credentials: false
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: lint-fixes
+          path: ${{ runner.temp }}/lint-fixes
+
+      - run: git apply --include='*.rs' "$RUNNER_TEMP/lint-fixes/lint-fixes.patch"
+
+      - uses: peter-evans/create-pull-request@v8
+        with:
+          commit-message: "chore(autofix): formatting and lint"
+          branch: auto-fix/rust-${{ github.event.pull_request.number || github.ref_name }}
+          delete-branch: true
+          title: "chore(autofix): formatting and lint"
+          body: "Automated rustfmt and Clippy fixes from CI"
+          labels: automated,rust
+          add-paths: "**/*.rs"
 
   build:
-    name: Build
+    needs: check
+    if: needs.check.outputs.has_binaries == 'true'
     uses: ./.github/workflows/build.yml
+    permissions:
+      contents: read
+    with:
+      snapshot: true
+
+  geiger:
+    name: Unsafe code report
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@nightly
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: check
+          cache-workspace-crates: true
+          save-if: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-geiger
+
+      - run: cargo +nightly geiger --all-features --output-format GitHubMarkdown >> "$GITHUB_STEP_SUMMARY"
+
+  semver:
+    name: Semantic versioning
+    needs: check
+    if: needs.check.outputs.has_library == 'true'
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: obi1kenobi/cargo-semver-checks-action@v2

@@ -1,3 +1,6 @@
+// wgpu's deeply nested auto-trait evaluation overflows the default limit under clippy -D warnings.
+#![recursion_limit = "256"]
+
 #[cfg(not(target_family = "wasm"))]
 pub mod backend;
 pub mod candidate;

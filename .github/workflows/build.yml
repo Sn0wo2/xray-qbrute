@@ -2,69 +2,148 @@ name: Build
 
 on:
   workflow_call:
+    inputs:
+      ref:
+        type: string
+      version:
+        type: string
+      snapshot:
+        type: boolean
+        default: true
 
-permissions:
-  contents: read
+permissions: {}
+
+env:
+  GORELEASER_CURRENT_TAG: ${{ inputs.version && format('v{0}', inputs.version) }}
 
 jobs:
   build:
-    name: Build
-    runs-on: ubuntu-latest
+    name: Build ${{ matrix.platform }}
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-windows
+            os: ubuntu-latest
+            targets: x86_64-unknown-linux-gnu,x86_64-pc-windows-gnu,aarch64-unknown-linux-gnu,armv7-unknown-linux-gnueabihf
+            artifacts: |
+              dist/*.tar.gz
+              dist/*.zip
+          - platform: macos
+            os: macos-latest
+            targets: x86_64-apple-darwin,aarch64-apple-darwin
+            artifacts: dist/*_darwin_*.tar.gz
+    env:
+      BUILD_PLATFORM: ${{ matrix.platform }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v7
+      - uses: actions/checkout@v7
         with:
+          ref: ${{ inputs.ref || github.ref }}
           fetch-depth: 0
+          persist-credentials: false
 
-      - name: Set up Rust
-        uses: dtolnay/rust-toolchain@nightly
+      - uses: dtolnay/rust-toolchain@nightly
         with:
-          targets: x86_64-unknown-linux-gnu,aarch64-unknown-linux-gnu,x86_64-pc-windows-gnu
+          targets: ${{ matrix.targets }}
           components: rust-src
 
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        if: ${{ !inputs.snapshot }}
+        with:
+          tool: cargo-edit
 
-      - name: Set up Zig
-        uses: mlugg/setup-zig@v2
+      - name: Sync workspace version
+        if: ${{ !inputs.snapshot }}
+        run: cargo set-version --workspace "$VERSION"
+        env:
+          VERSION: ${{ inputs.version }}
 
-      - name: Install GoReleaser
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: build-${{ matrix.platform }}
+          cache-workspace-crates: true
+          save-if: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+
+      - uses: taiki-e/install-action@v2
+        if: runner.os == 'Linux'
+        with:
+          tool: cargo-zigbuild
+
+      - name: Install mingw-w64
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y mingw-w64
+
+      - uses: mlugg/setup-zig@v2
+        if: runner.os == 'Linux'
+
+      - name: Ensure build script is executable
+        if: runner.os == 'Linux'
+        run: chmod +x scripts/cargo-or-zigbuild.js
+
+      - name: Build and package archives
         uses: goreleaser/goreleaser-action@v7
         with:
-          distribution: goreleaser
-          version: '~> v2'
-          install-only: true
+          args: release --clean ${{ inputs.snapshot && '--snapshot' || '--skip=publish,validate' }}
 
-      - name: Build packages
-        run: goreleaser build --snapshot --clean --parallelism 2
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@v7
         with:
-          name: xray-qbrute-builds
-          path: dist/*
-          retention-days: 7
+          name: ${{ github.event.repository.name }}-${{ matrix.platform }}-builds
+          path: ${{ matrix.artifacts }}
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: ${{ inputs.snapshot && 7 || 30 }}
+
+      - name: Stage container binaries
+        if: ${{ matrix.platform == 'linux-windows' && !inputs.snapshot }}
+        run: |
+          set -euo pipefail
+          stage_binary() {
+            local build_id="$1"
+            local target="$2"
+            local destination="$3"
+            local source
+            source=$(jq -er --arg id "$build_id" --arg target "$target" '
+              [.[] | select(.type == "Binary" and .extra.ID == $id and .extra.Binary == "xray-qbrute" and .target == $target) | .path]
+              | if length == 1 then .[0] else error("expected one matching binary artifact") end
+            ' dist/artifacts.json)
+            install -D -m 0755 "$source" "container-context/$destination/xray-qbrute"
+          }
+          stage_binary linux-windows-amd64-v2 x86_64-unknown-linux-gnu linux/amd64
+          stage_binary linux-arm aarch64-unknown-linux-gnu linux/arm64
+
+      - uses: actions/upload-artifact@v7
+        if: ${{ matrix.platform == 'linux-windows' && !inputs.snapshot }}
+        with:
+          name: container-binaries
+          path: container-context
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 1
 
   web:
     name: WebAssembly browser build
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
-      - name: Checkout
-        uses: actions/checkout@v7
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
-      - name: Set up Rust
-        uses: dtolnay/rust-toolchain@nightly
+      - uses: dtolnay/rust-toolchain@nightly
         with:
           targets: wasm32-unknown-unknown
           components: rust-src
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
+
+      - uses: Swatinem/rust-cache@v2
         with:
           key: wasm-web
           workspaces: '. -> target'
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
 
@@ -76,4 +155,3 @@ jobs:
 
       - name: Verify browser artifact
         run: node scripts/build.ts verify
-

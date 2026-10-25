@@ -2,50 +2,333 @@ name: Release
 
 on:
   push:
-    tags:
-      - 'v*'
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to release (e.g. 0.1.1)
+        required: true
+        type: string
+      snapshot:
+        description: Build a snapshot without bumping, tagging, or publishing
+        type: boolean
 
-permissions:
-  contents: write
+permissions: {}
 
 concurrency:
-  group: release
-  cancel-in-progress: false
+  group: release-${{ inputs.snapshot && format('snapshot-{0}', github.ref) || 'publish' }}
+  cancel-in-progress: ${{ inputs.snapshot == true }}
+
+env:
+  CARGO_TERM_COLOR: always
 
 jobs:
-  release:
-    name: Release
+  prepare:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      checks: read
+    outputs:
+      skip: ${{ steps.release.outputs.skip }}
+      version: ${{ steps.version.outputs.version }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+      sha: ${{ steps.metadata.outputs.sha }}
+      retry: ${{ steps.tag.outputs.retry }}
+      has_binaries: ${{ steps.metadata.outputs.has_binaries }}
+      has_publishable_crates: ${{ steps.metadata.outputs.has_publishable_crates }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v7
+      - uses: actions/checkout@v7
         with:
+          ref: ${{ (github.event_name == 'push' || inputs.snapshot) && github.ref || github.event.repository.default_branch }}
           fetch-depth: 0
+          persist-credentials: false
 
-      - name: Set up Rust
-        uses: dtolnay/rust-toolchain@nightly
-        with:
-          targets: x86_64-unknown-linux-gnu,x86_64-pc-windows-gnu,aarch64-unknown-linux-gnu
-          components: rust-src
-
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
-
-      - name: Set up Zig
-        uses: mlugg/setup-zig@v2
-
-      - name: Run GoReleaser
-        uses: goreleaser/goreleaser-action@v7
-        with:
-          distribution: goreleaser
-          version: '~> v2'
-          args: release --clean
+      - name: Normalize version
+        id: version
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_VERSION: ${{ inputs.version || github.ref_name }}
+        run: |
+          version=${RELEASE_VERSION#v}
+          if [[ $version != [0-9]* || $(npm exec --yes --package=semver@7 -- semver "$version") != "${version%%+*}" ]]; then
+            echo "Invalid semantic version: $RELEASE_VERSION" >&2
+            exit 1
+          fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          [[ ${version%%+*} != *-* ]] || echo "prerelease=true" >> "$GITHUB_OUTPUT"
 
-      - name: Upload release artifacts
-        uses: actions/upload-artifact@v7
+      - name: Check for an already published release
+        id: release
+        if: ${{ !inputs.snapshot }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node scripts/check-release.js "v$VERSION"
+
+      - name: Resume an existing release tag
+        id: tag
+        if: github.event_name == 'workflow_dispatch' && !inputs.snapshot && steps.release.outputs.skip != 'true'
+        run: |
+          if git show-ref --verify --quiet "refs/tags/v$VERSION"; then
+            git checkout --detach "v$VERSION"
+            echo "retry=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: dtolnay/rust-toolchain@stable
+        if: steps.release.outputs.skip != 'true'
         with:
-          name: release-artifacts
-          path: dist/*
-          retention-days: 30
+          components: clippy,rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+        if: steps.release.outputs.skip != 'true'
+        with:
+          shared-key: check
+          cache-workspace-crates: true
+          save-if: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+
+      - uses: taiki-e/install-action@v2
+        if: ${{ !inputs.snapshot && steps.release.outputs.skip != 'true' }}
+        with:
+          tool: cargo-edit
+
+      - name: Sync workspace version
+        id: sync
+        if: ${{ !inputs.snapshot && steps.release.outputs.skip != 'true' }}
+        run: |
+          cargo set-version --workspace "$VERSION"
+          if ! git diff --quiet -- '*Cargo.toml' Cargo.lock; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/github-script@v9
+        id: metadata
+        if: steps.release.outputs.skip != 'true'
+        env:
+          VERIFY_VERSION: ${{ !inputs.snapshot }}
+        with:
+          script: |
+            const { packages } = JSON.parse(
+              (await exec.getExecOutput("cargo", ["metadata", "--no-deps", "--format-version", "1"], { silent: true })).stdout,
+            )
+            const binaries = packages.filter((pkg) => pkg.targets.some((target) => target.kind.includes("bin")))
+            const publishable = packages.filter((pkg) => pkg.publish == null || pkg.publish.includes("crates-io"))
+            if (process.env.VERIFY_VERSION === "true") {
+              const mismatches = [...new Set([...binaries, ...publishable])].filter((pkg) => pkg.version !== process.env.VERSION)
+              if (mismatches.length) throw new Error(`Expected released packages to have version ${process.env.VERSION}`)
+            }
+            const sha = (await exec.getExecOutput("git", ["rev-parse", "HEAD"], { silent: true })).stdout.trim()
+            if (context.eventName === "push" && sha !== context.sha) throw new Error("Checkout does not match the pushed tag")
+            core.setOutput("has_binaries", binaries.length > 0)
+            core.setOutput("has_publishable_crates", publishable.length > 0)
+            core.setOutput("sha", sha)
+
+      - name: Reuse CI checks for this commit
+        if: github.event_name == 'push' && steps.release.outputs.skip != 'true' && steps.sync.outputs.changed != 'true'
+        timeout-minutes: 15
+        uses: lewagon/wait-on-check-action@v1.9.1
+        with:
+          ref: ${{ steps.metadata.outputs.sha }}
+          check-name: Checks
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          allowed-conclusions: success
+
+      - name: Check the release candidate
+        if: steps.release.outputs.skip != 'true' && (github.event_name == 'workflow_dispatch' || steps.sync.outputs.changed == 'true')
+        run: make lint check check-no-default test test-all test-no-default doc
+
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        if: steps.release.outputs.skip != 'true' && (github.event_name == 'workflow_dispatch' || steps.sync.outputs.changed == 'true')
+
+      - name: Save the checked version changes
+        if: github.event_name == 'workflow_dispatch' && !inputs.snapshot && steps.release.outputs.skip != 'true' && steps.tag.outputs.retry != 'true'
+        run: git diff --binary -- '*Cargo.toml' Cargo.lock > "$RUNNER_TEMP/version.patch"
+
+      - uses: actions/upload-artifact@v7
+        if: github.event_name == 'workflow_dispatch' && !inputs.snapshot && steps.release.outputs.skip != 'true' && steps.tag.outputs.retry != 'true'
+        with:
+          name: version-changes
+          path: ${{ runner.temp }}/version.patch
+          retention-days: 1
+          if-no-files-found: error
+
+  tag:
+    needs: prepare
+    if: >-
+      github.event_name == 'workflow_dispatch' && !inputs.snapshot &&
+      needs.prepare.outputs.skip != 'true' && needs.prepare.outputs.retry != 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      sha: ${{ steps.commit.outputs.sha }}
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
+          persist-credentials: false
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: version-changes
+          path: ${{ runner.temp }}/version-changes
+
+      - run: git apply --allow-empty --include='*Cargo.toml' --include=Cargo.lock "$RUNNER_TEMP/version-changes/version.patch"
+
+      - name: Commit and tag the checked version
+        id: commit
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -u
+          git diff --cached --quiet || git commit -m "chore(release): bump version to $VERSION"
+          git tag "v$VERSION"
+          git -c credential.helper='!gh auth git-credential' push --atomic origin "HEAD:refs/heads/$DEFAULT_BRANCH" "refs/tags/v$VERSION"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: [prepare, tag]
+    if: >-
+      !cancelled() && needs.prepare.result == 'success' && needs.prepare.outputs.has_binaries == 'true' &&
+      (needs.tag.result == 'success' || needs.tag.result == 'skipped')
+    uses: ./.github/workflows/build.yml
+    permissions:
+      contents: read
+    with:
+      ref: ${{ needs.tag.outputs.sha || needs.prepare.outputs.sha }}
+      version: ${{ needs.prepare.outputs.version }}
+      snapshot: ${{ inputs.snapshot == true }}
+
+  crates:
+    needs: [prepare, tag, build]
+    if: >-
+      !cancelled() && !inputs.snapshot && needs.prepare.outputs.has_publishable_crates == 'true' &&
+      !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.tag.outputs.sha || needs.prepare.outputs.sha }}
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: check
+          cache-workspace-crates: true
+          save-if: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-edit
+
+      - name: Sync workspace version
+        run: cargo set-version --workspace "$VERSION"
+
+      - uses: katyo/publish-crates@v2
+        with:
+          registry-token: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          args: --allow-dirty
+
+  publish:
+    needs: [prepare, tag, build, crates]
+    if: >-
+      !cancelled() && !inputs.snapshot && needs.prepare.result == 'success' &&
+      needs.prepare.outputs.skip != 'true' &&
+      !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        if: needs.prepare.outputs.has_binaries == 'true'
+        with:
+          pattern: ${{ github.event.repository.name }}-*-builds
+          merge-multiple: true
+          path: dist
+
+      - name: Generate checksums
+        if: needs.prepare.outputs.has_binaries == 'true'
+        working-directory: dist
+        run: |
+          shopt -s nullglob
+          files=(*.tar.gz *.zip)
+          ((${#files[@]}))
+          sha256sum -- "${files[@]}" > checksums.txt
+
+      - uses: softprops/action-gh-release@v3
+        id: release
+        with:
+          tag_name: v${{ needs.prepare.outputs.version }}
+          draft: true
+          prerelease: ${{ needs.prepare.outputs.prerelease == 'true' }}
+          generate_release_notes: true
+          files: dist/*
+          fail_on_unmatched_files: ${{ needs.prepare.outputs.has_binaries == 'true' }}
+
+      - uses: actions/github-script@v9
+        env:
+          RELEASE_ID: ${{ steps.release.outputs.id }}
+        with:
+          script: |
+            await github.rest.repos.updateRelease({
+              ...context.repo,
+              release_id: Number(process.env.RELEASE_ID),
+              draft: false,
+            })
+
+  container:
+    needs: [prepare, tag, build, publish]
+    if: ${{ !cancelled() && needs.publish.result == 'success' && needs.build.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.tag.outputs.sha || needs.prepare.outputs.sha }}
+          persist-credentials: false
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: container-binaries
+
+      - uses: docker/setup-qemu-action@v4
+        with:
+          platforms: arm64
+
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/metadata-action@v6
+        id: metadata
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=raw,value=v${{ needs.prepare.outputs.version }}
+            type=raw,value=latest,enable=${{ needs.prepare.outputs.prerelease != 'true' }}
+            type=raw,value=beta-latest
+
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.metadata.outputs.tags }}
+          labels: ${{ steps.metadata.outputs.labels }}
+          cache-from: type=gha,scope=container
+          cache-to: type=gha,mode=max,scope=container,ignore-error=true

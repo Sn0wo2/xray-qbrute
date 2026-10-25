@@ -2,48 +2,71 @@ version: 2
 
 project_name: xray-qbrute
 
-before:
-  hooks:
-    - cargo install cargo-zigbuild --locked
-
 builds:
-  - id: xray-qbrute
+  - &darwin-build
+    id: darwin-arm64
     builder: rust
-    tool: cargo
-    command: zigbuild
     binary: xray-qbrute
-    targets:
-      - x86_64-unknown-linux-gnu
-      - aarch64-unknown-linux-gnu
-      - x86_64-pc-windows-gnu
-    flags:
-      - --release
-      - -p=xray-qbrute-cli
+    skip: '{{ ne (envOrDefault "BUILD_PLATFORM" "linux-windows") "macos" }}'
+    targets: [aarch64-apple-darwin]
+    flags: [--release, --package=xray-qbrute-cli, --bin=xray-qbrute]
+
+  - &linux-build
+    <<: *darwin-build
+    id: linux-arm
+    tool: ./scripts/cargo-or-zigbuild.js
+    skip: '{{ ne (envOrDefault "BUILD_PLATFORM" "linux-windows") "linux-windows" }}'
+    targets: [aarch64-unknown-linux-gnu, armv7-unknown-linux-gnueabihf]
+
+  - &linux-amd64-build
+    <<: *linux-build
+    id: linux-windows-amd64-v2
+    targets: [x86_64-unknown-linux-gnu, x86_64-pc-windows-gnu]
+    env:
+      - 'RUSTFLAGS={{ index .Env "RUSTFLAGS" }} -C target-cpu=x86-64-v2'
+
+  - <<: *linux-amd64-build
+    id: linux-windows-amd64-v3
+    env:
+      - 'RUSTFLAGS={{ index .Env "RUSTFLAGS" }} -C target-cpu=x86-64-v3'
+
+  - &darwin-amd64-build
+    <<: *darwin-build
+    id: darwin-amd64-v2
+    targets: [x86_64-apple-darwin]
+    env:
+      - 'RUSTFLAGS={{ index .Env "RUSTFLAGS" }} -C target-cpu=x86-64-v2'
+
+  - <<: *darwin-amd64-build
+    id: darwin-amd64-v3
+    env:
+      - 'RUSTFLAGS={{ index .Env "RUSTFLAGS" }} -C target-cpu=x86-64-v3'
 
 archives:
-  - formats:
-      - zip
-    files:
-      - LICENSE
+  - &amd64-archive
+    id: amd64-v2
+    ids: [linux-windows-amd64-v2, darwin-amd64-v2]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}_v2"
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files: ["LICENS[E]", "README.m[d]"]
 
-checksum:
-  name_template: checksums.txt
+  - <<: *amd64-archive
+    id: amd64-v3
+    ids: [linux-windows-amd64-v3, darwin-amd64-v3]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}_v3"
+
+  - id: arm
+    ids: [linux-arm, darwin-arm64]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files: ["LICENS[E]", "README.m[d]"]
 
 snapshot:
-  version_template: '{{ incpatch .Version }}-next'
+  version_template: "{{ .Version }}-next"
+
+checksum:
+  disable: true
 
 changelog:
-  sort: asc
-  filters:
-    exclude:
-      - '^docs:'
-      - '^test:'
-      - '^ci:'
-
-release:
-  github:
-    owner: Sn0wo2
-    name: xray-qbrute
-  draft: false
-  prerelease: auto
-  name_template: 'v{{ .Version }}'
+  disable: true
