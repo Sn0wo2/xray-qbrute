@@ -4,15 +4,13 @@
 
 > Brute-force Xray-core Telegram group question 26/7/14
 
-  26/10/26 可用
-
 ## About
 
   xray-qbrute 是帮助你计算 [Xray-core](https://github.com/XTLS/Xray-core) [Telegram](https://t.me/projectXray) 入群问题的工具
 
   开发思路可参见 [讨论过程](https://github.com/XTLS/Xray-core/discussions/6451)
 
-  若 [Xray-core](https://github.com/XTLS/Xray-core) [Telegram](https://t.me/projectXray) 更换题目, 不保证继续维护; 截至 26/7/14 可用
+  若 [Xray-core](https://github.com/XTLS/Xray-core) [Telegram](https://t.me/projectXray) 更换题目, 不保证继续维护; 截至 26/10/26 可用
 
 ## WASM
 
