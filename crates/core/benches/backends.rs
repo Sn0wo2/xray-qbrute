@@ -3,7 +3,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
-use xray_qbrute_core::backend::{self, ProgressReporter, SearchConfig};
+#[cfg(any(feature = "avx2", feature = "wgpu", feature = "cuda"))]
+use xray_qbrute_core::backend;
+use xray_qbrute_core::backend::{ProgressReporter, SearchConfig};
 use xray_qbrute_core::candidate::CandidateConfig;
 use xray_qbrute_core::search::{self, BackendKind};
 

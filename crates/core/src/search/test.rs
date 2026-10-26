@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+#[cfg(feature = "wgpu")]
 use clap::ValueEnum;
 
 use super::*;
