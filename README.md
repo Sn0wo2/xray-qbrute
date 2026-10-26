@@ -4,6 +4,8 @@
 
 > Brute-force Xray-core Telegram group question 26/7/14
 
+  26/10/26 可用
+
 ## About
 
   xray-qbrute 是帮助你计算 [Xray-core](https://github.com/XTLS/Xray-core) [Telegram](https://t.me/projectXray) 入群问题的工具
@@ -12,11 +14,9 @@
 
   若 [Xray-core](https://github.com/XTLS/Xray-core) [Telegram](https://t.me/projectXray) 更换题目, 不保证继续维护; 截至 26/7/14 可用
 
-## Download
+## WASM
 
-  从 [Releases](https://github.com/Sn0wo2/xray-qbrute/releases) 获取各平台的预编译二进制与 checksums.txt; 容器镜像发布于 [ghcr.io/sn0wo2/xray-qbrute](https://github.com/Sn0wo2/xray-qbrute/pkgs/container/xray-qbrute)
-
-  网页版 (Wasm) 会由 CI 自动部署至 GitHub Pages; 尚无 Release 时, 可前往 [CI Actions](https://github.com/Sn0wo2/xray-qbrute/actions/workflows/ci.yml), 在「Artifacts」中下载「xray-qbrute-linux-windows-builds」或「xray-qbrute-macos-builds」快照构建
+  由 CI/CD 自动部署至 [GitHub Pages](https://xray-qbrute.0wo.cc)
 
 ## Thanks
 
