@@ -10,7 +10,7 @@ interface SearchFormOptions {
 
 export function useSearchForm(options: SearchFormOptions) {
   const form = reactive({
-    commit: 'eb366895',
+    commit: '90243a74',
     node: '',
     difficulty: '33',
     maxIndex: '288230376151711744',

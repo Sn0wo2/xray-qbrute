@@ -21,7 +21,7 @@ struct Args {
 
     #[arg(
         long,
-        default_value = "eb366895",
+        default_value = "90243a74",
         value_name = "HEX8",
         help = "Commit hash (8 hex characters)"
     )]
