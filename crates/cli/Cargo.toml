@@ -8,6 +8,7 @@ publish.workspace = true
 [[bin]]
 name = "xray-qbrute"
 path = "src/main.rs"
+doc = false
 
 [dependencies]
 xray-qbrute-core = { path = "../core", default-features = false }
