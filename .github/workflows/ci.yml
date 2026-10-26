@@ -27,7 +27,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: dtolnay/rust-toolchain@nightly
+      - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy,rustfmt
 
@@ -111,8 +111,6 @@ jobs:
     uses: ./.github/workflows/build.yml
     permissions:
       contents: read
-    with:
-      snapshot: true
 
   geiger:
     name: Unsafe code report
@@ -129,8 +127,6 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: check
-          cache-workspace-crates: true
           save-if: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
 
       - uses: taiki-e/install-action@v2

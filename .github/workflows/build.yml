@@ -45,10 +45,9 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - uses: dtolnay/rust-toolchain@nightly
+      - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.targets }}
-          components: rust-src
 
       - uses: taiki-e/install-action@v2
         if: ${{ !inputs.snapshot }}
