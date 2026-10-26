@@ -137,7 +137,12 @@ jobs:
         with:
           tool: cargo-geiger
 
-      - run: cargo +nightly geiger --all-features --output-format GitHubMarkdown >> "$GITHUB_STEP_SUMMARY"
+      # cargo-geiger cannot run against a virtual manifest, so iterate over workspace members
+      - run: |
+          for manifest in $(cargo metadata --no-deps --format-version 1 | jq -r '.packages[].manifest_path'); do
+            echo "# $(basename "$(dirname "$manifest")")" >> "$GITHUB_STEP_SUMMARY"
+            cargo +nightly geiger --all-features --manifest-path "$manifest" --output-format GitHubMarkdown >> "$GITHUB_STEP_SUMMARY"
+          done
 
   semver:
     name: Semantic versioning
