@@ -19,6 +19,8 @@ const targetIndex = args.findIndex((arg) => arg === "--target" || arg.startsWith
 const targetArg = args[targetIndex]
 const target = targetArg === "--target" ? args[targetIndex + 1] : targetArg?.slice(9)
 let env = process.env
+if (args[0] === "build" || args[0] === "zigbuild") args.shift()
+let command = "build"
 if (target === "x86_64-pc-windows-gnu" && target !== host) {
   env = {
     ...env,
@@ -29,9 +31,9 @@ if (target === "x86_64-pc-windows-gnu" && target !== host) {
     ...env,
     CARGO_ZIGBUILD_CACHE_DIR: resolve("target", "zigbuild", target, createHash("sha256").update(process.env.RUSTFLAGS ?? "").digest("hex")),
   }
-  if (args[0] === "build") args.shift()
-  args.unshift("zigbuild")
+  command = "zigbuild"
 }
+args.unshift(command)
 
 process.exit(
   spawnSync("cargo", args, {
