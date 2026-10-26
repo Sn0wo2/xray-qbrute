@@ -7,6 +7,7 @@ builds:
     id: darwin-arm64
     builder: rust
     binary: xray-qbrute
+    tool: ./scripts/cargo-or-zigbuild.js
     skip: '{{ ne (envOrDefault "BUILD_PLATFORM" "linux-windows") "macos" }}'
     targets: [aarch64-apple-darwin]
     flags: [--release, --package=xray-qbrute-cli, --bin=xray-qbrute]

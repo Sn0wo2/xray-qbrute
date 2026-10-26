@@ -78,7 +78,6 @@ jobs:
       - uses: mlugg/setup-zig@v2
 
       - name: Ensure build script is executable
-        if: runner.os == 'Linux'
         run: chmod +x scripts/cargo-or-zigbuild.js
 
       - name: Build and package archives

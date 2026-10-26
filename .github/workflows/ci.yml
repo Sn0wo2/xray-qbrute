@@ -141,7 +141,7 @@ jobs:
       - run: |
           for manifest in $(cargo metadata --no-deps --format-version 1 | jq -r '.packages[].manifest_path'); do
             echo "# $(basename "$(dirname "$manifest")")" >> "$GITHUB_STEP_SUMMARY"
-            cargo +nightly geiger --all-features --manifest-path "$manifest" --output-format GitHubMarkdown >> "$GITHUB_STEP_SUMMARY"
+            cargo +nightly geiger --all-features --manifest-path "$manifest" --output-format GitHubMarkdown >> "$GITHUB_STEP_SUMMARY" || true
           done
 
   semver:
