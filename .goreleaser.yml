@@ -1,5 +1,4 @@
 version: 2
-
 project_name: xray-qbrute
 
 builds:
@@ -60,7 +59,7 @@ archives:
 
   - id: arm
     ids: [linux-arm, darwin-arm64]
-    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ if eq .Arch \"arm\" }}armv{{ .Arm }}{{ else }}{{ .Arch }}{{ end }}"
     files: ["LICENS[E]", "README.m[d]"]
 
 snapshot:
