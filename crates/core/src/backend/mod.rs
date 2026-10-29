@@ -42,12 +42,12 @@ pub struct BackendOutcome {
 pub type ProgressReporter = Arc<dyn Fn(u64) + Send + Sync>;
 
 pub fn hit_probability(attempts: u64, leading_zero_bits: u32) -> f64 {
-    let work_factor = 2f64.powi(leading_zero_bits as i32);
+    let work_factor = 2_f64.powi(leading_zero_bits as i32);
     -(-(attempts as f64) / work_factor).exp_m1()
 }
 
 pub fn expected_search_seconds(leading_zero_bits: u32, rate_per_second: f64) -> f64 {
-    2f64.powi(leading_zero_bits as i32) / rate_per_second.max(f64::EPSILON)
+    2_f64.powi(leading_zero_bits as i32) / rate_per_second.max(f64::EPSILON)
 }
 
 #[derive(Debug)]

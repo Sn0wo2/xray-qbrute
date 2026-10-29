@@ -39,7 +39,7 @@ pub fn search(
     }
 
     let mut start = config.start_index;
-    let mut evaluated = 0u64;
+    let mut evaluated = 0_u64;
 
     while start < config.max_index {
         let end = (start + SEARCH_CHUNK_SIZE).min(config.max_index);
@@ -139,7 +139,7 @@ unsafe fn first_digest_words_avx2(indices: [u64; 4], config: CandidateConfig) ->
         candidate_words[1][1] as i64,
         candidate_words[0][1] as i64,
     );
-    schedule[2] = _mm256_set1_epi64x(0x8000000000000000u64 as i64);
+    schedule[2] = _mm256_set1_epi64x(0x8000000000000000_u64 as i64);
     schedule[15] = _mm256_set1_epi64x(128);
 
     let (mut a, mut b, mut c, mut d, mut e, mut f, mut g, mut h) = (
@@ -206,7 +206,7 @@ unsafe fn first_digest_words_avx2(indices: [u64; 4], config: CandidateConfig) ->
     }
 
     let digest_word = _mm256_add_epi64(a, _mm256_set1_epi64x(IV[0] as i64));
-    let mut output = [0u64; 4];
+    let mut output = [0_u64; 4];
     unsafe { _mm256_storeu_si256(output.as_mut_ptr().cast(), digest_word) };
     output
 }

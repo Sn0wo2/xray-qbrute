@@ -8,7 +8,7 @@ use crate::candidate::CandidateConfig;
 use super::{BackendOutcome, ProgressReporter, SearchConfig, SearchError, SearchHit};
 
 const MAX_BATCH: u64 = 1 << 28;
-const SEARCH_RESULT_SIZE: u64 = std::mem::size_of::<GpuResult>() as u64;
+const SEARCH_RESULT_SIZE: u64 = size_of::<GpuResult>() as u64;
 const TUNING_DIFFICULTY_BITS: u32 = 64;
 const TUNING_CANDIDATE: CandidateConfig = CandidateConfig {
     commit: 0xa5a5_5a5a,
@@ -50,7 +50,7 @@ pub enum WgpuBackend {
 }
 
 impl WgpuBackend {
-    fn name(self) -> &'static str {
+    const fn name(self) -> &'static str {
         match self {
             Self::Vulkan => "wgpu-vulkan",
             Self::Metal => "wgpu-metal",
@@ -129,7 +129,7 @@ impl WgpuSearchSession {
         progress: &ProgressReporter,
     ) -> Result<BackendOutcome, SearchError> {
         let mut base = config.start_index;
-        let mut evaluated = 0u64;
+        let mut evaluated = 0_u64;
         let search_start = Instant::now();
         let max_batch = MAX_BATCH.min(
             u64::from(self.context.max_workgroups_per_dimension)
@@ -149,7 +149,7 @@ impl WgpuSearchSession {
                         result.min_offset
                     )));
                 }
-                let index = base + result.min_offset as u64;
+                let index = base + u64::from(result.min_offset);
                 let processed = index + 1;
                 progress(processed - base);
                 return Ok(BackendOutcome {
@@ -339,7 +339,7 @@ async fn create_context_async(
     })
 }
 
-fn storage_binding(binding: u32, read_only: bool) -> wgpu::BindGroupLayoutEntry {
+const fn storage_binding(binding: u32, read_only: bool) -> wgpu::BindGroupLayoutEntry {
     wgpu::BindGroupLayoutEntry {
         binding,
         visibility: wgpu::ShaderStages::COMPUTE,
@@ -353,7 +353,7 @@ fn storage_binding(binding: u32, read_only: bool) -> wgpu::BindGroupLayoutEntry 
 }
 
 #[cfg(test)]
-fn create_in_memory_pipeline_cache(_device: &wgpu::Device) -> Option<wgpu::PipelineCache> {
+const fn create_in_memory_pipeline_cache(_device: &wgpu::Device) -> Option<wgpu::PipelineCache> {
     None
 }
 
@@ -374,7 +374,7 @@ fn create_in_memory_pipeline_cache(device: &wgpu::Device) -> Option<wgpu::Pipeli
 }
 
 #[cfg(test)]
-fn cleanup_legacy_pipeline_caches(_adapter_info: &wgpu::AdapterInfo) {}
+const fn cleanup_legacy_pipeline_caches(_adapter_info: &wgpu::AdapterInfo) {}
 
 #[cfg(not(test))]
 fn cleanup_legacy_pipeline_caches(adapter_info: &wgpu::AdapterInfo) {
@@ -458,7 +458,7 @@ fn create_search_pipeline(
 fn create_search_buffers(device: &wgpu::Device, layout: &wgpu::BindGroupLayout) -> SearchBuffers {
     let params = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("xray-qbrute search params"),
-        size: std::mem::size_of::<GpuParams>() as u64,
+        size: size_of::<GpuParams>() as u64,
         usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });
@@ -739,10 +739,10 @@ impl GpuContext {
 
     fn hash_first_words(&self, base: u64, candidate_count: u64) -> Result<Vec<u64>, SearchError> {
         let params = make_params(base, candidate_count);
-        let output_size = candidate_count * std::mem::size_of::<u64>() as u64;
+        let output_size = candidate_count * size_of::<u64>() as u64;
         let params_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("xray-qbrute hash params"),
-            size: std::mem::size_of::<GpuParams>() as u64,
+            size: size_of::<GpuParams>() as u64,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -827,7 +827,7 @@ impl GpuContext {
     }
 }
 
-fn make_params(base: u64, candidate_count: u64) -> GpuParams {
+const fn make_params(base: u64, candidate_count: u64) -> GpuParams {
     GpuParams {
         base_lo: base as u32,
         base_hi: (base >> 32) as u32,

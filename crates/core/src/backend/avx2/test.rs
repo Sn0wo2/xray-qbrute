@@ -43,7 +43,7 @@ fn avx2_first_words_match_rustcrypto() {
         (1 << 58) - 4,
     ];
     for base in bases {
-        for offset in 0..128u64 {
+        for offset in 0..128_u64 {
             let indices = [
                 base + offset,
                 base + offset + 1,

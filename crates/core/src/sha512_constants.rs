@@ -1,4 +1,4 @@
-pub const IV: [u64; 8] = [
+pub(crate) const IV: [u64; 8] = [
     0x6a09e667f3bcc908,
     0xbb67ae8584caa73b,
     0x3c6ef372fe94f82b,
@@ -9,7 +9,7 @@ pub const IV: [u64; 8] = [
     0x5be0cd19137e2179,
 ];
 
-pub const ROUND_CONSTANTS: [u64; 80] = [
+pub(crate) const ROUND_CONSTANTS: [u64; 80] = [
     0x428a2f98d728ae22,
     0x7137449123ef65cd,
     0xb5c0fbcfec4d3b2f,
