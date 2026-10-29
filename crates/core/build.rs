@@ -2,6 +2,7 @@ use std::fmt::Write as _;
 use std::fs;
 use std::path::PathBuf;
 
+#[allow(unreachable_pub)]
 mod sha512_constants {
     include!("src/sha512_constants.rs");
 }
@@ -11,7 +12,14 @@ const WEB_TEMPLATE: &str = "src/shaders/sha512_web.wgsl";
 const CUDA_TEMPLATE: &str = "src/shaders/sha512_search.cu";
 const ROUND_MARKER: &str = "    // @SHA512_UNROLLED_ROUNDS@";
 
-fn main() {
+#[derive(Clone, Copy)]
+enum Shader {
+    Native,
+    Web,
+    Cuda,
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     for path in [
         NATIVE_TEMPLATE,
         WEB_TEMPLATE,
@@ -22,138 +30,135 @@ fn main() {
     }
     println!("cargo:rerun-if-changed=build.rs");
 
-    let output_dir = PathBuf::from(std::env::var_os("OUT_DIR").expect("OUT_DIR is set"));
+    let output_dir =
+        PathBuf::from(std::env::var_os("OUT_DIR").ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::NotFound, "OUT_DIR is not set")
+        })?);
     generate_shader(
         NATIVE_TEMPLATE,
         output_dir.join("sha512_search.wgsl"),
-        native_rounds(),
-    );
+        rounds(Shader::Native)?,
+    )?;
     generate_shader(
         WEB_TEMPLATE,
         output_dir.join("sha512_web.wgsl"),
-        web_rounds(),
-    );
+        rounds(Shader::Web)?,
+    )?;
     generate_shader(
         CUDA_TEMPLATE,
         output_dir.join("sha512_search.cu"),
-        cuda_rounds(),
-    );
+        rounds(Shader::Cuda)?,
+    )?;
+
+    Ok(())
 }
 
-fn generate_shader(template_path: &str, output_path: PathBuf, rounds: String) {
-    let template = fs::read_to_string(template_path).expect("read shader template");
-    assert_eq!(template.matches(ROUND_MARKER).count(), 1);
-    fs::write(output_path, template.replace(ROUND_MARKER, &rounds))
-        .expect("write generated shader");
-}
-
-fn native_rounds() -> String {
-    let mut output = String::new();
-    let mut state = ["a", "b", "c", "d", "e", "f", "g", "h"];
-
-    for (round, constant) in sha512_constants::ROUND_CONSTANTS.iter().enumerate() {
-        let slot = round & 15;
-        if round >= 16 {
-            writeln!(
-                output,
-                "    w{slot} = small_sigma1(w{}) + w{} + small_sigma0(w{}) + w{slot};",
-                (round + 14) & 15,
-                (round + 9) & 15,
-                (round + 1) & 15
-            )
-            .expect("write to String");
-        }
-        let [a, b, c, d, e, f, g, h] = state;
-        writeln!(output, "    let temp1_{round} = {h} + big_sigma1({e}) + (({e} & {f}) ^ ((~{e}) & {g})) + 0x{constant:016x}lu + w{slot};").expect("write to String");
-        writeln!(
-            output,
-            "    let temp2_{round} = big_sigma0({a}) + (({a} & {b}) ^ ({a} & {c}) ^ ({b} & {c}));"
-        )
-        .expect("write to String");
-        writeln!(output, "    {d} = {d} + temp1_{round};").expect("write to String");
-        writeln!(output, "    {h} = temp1_{round} + temp2_{round};").expect("write to String");
-        state = [h, a, b, c, d, e, f, g];
+fn generate_shader(
+    template_path: &str,
+    output_path: PathBuf,
+    rounds: String,
+) -> Result<(), std::io::Error> {
+    let template = fs::read_to_string(template_path)?;
+    if template.matches(ROUND_MARKER).count() != 1 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("shader template {template_path} must contain one round marker"),
+        ));
     }
-
-    writeln!(
-        output,
-        "    return {} + 0x{:016x}lu;",
-        state[0],
-        sha512_constants::IV[0]
-    )
-    .expect("write to String");
-    output
+    fs::write(output_path, template.replace(ROUND_MARKER, &rounds))
 }
 
-fn web_rounds() -> String {
+fn rounds(shader: Shader) -> Result<String, std::fmt::Error> {
     let mut output = String::new();
     let mut state = ["a", "b", "c", "d", "e", "f", "g", "h"];
 
     for (round, constant) in sha512_constants::ROUND_CONSTANTS.iter().enumerate() {
         let slot = round & 15;
         if round >= 16 {
-            writeln!(output, "    w{slot} = add64(add64(small_sigma1(w{}), w{}), add64(small_sigma0(w{}), w{slot}));", (round + 14) & 15, (round + 9) & 15, (round + 1) & 15).expect("write to String");
+            match shader {
+                Shader::Native | Shader::Cuda => writeln!(
+                    output,
+                    "    w{slot} = small_sigma1(w{}) + w{} + small_sigma0(w{}) + w{slot};",
+                    (round + 14) & 15,
+                    (round + 9) & 15,
+                    (round + 1) & 15
+                )?,
+                Shader::Web => writeln!(
+                    output,
+                    "    w{slot} = add64(add64(small_sigma1(w{}), w{}), add64(small_sigma0(w{}), w{slot}));",
+                    (round + 14) & 15,
+                    (round + 9) & 15,
+                    (round + 1) & 15
+                )?,
+            }
         }
         let [a, b, c, d, e, f, g, h] = state;
         let high = constant >> 32;
         let low = constant & 0xffff_ffff;
-        writeln!(output, "    let temp1_{round} = add64(add64(add64({h}, big_sigma1({e})), choice({e}, {f}, {g})), add64(vec2<u32>(0x{high:08x}u, 0x{low:08x}u), w{slot}));").expect("write to String");
-        writeln!(
-            output,
-            "    let temp2_{round} = add64(big_sigma0({a}), majority({a}, {b}, {c}));"
-        )
-        .expect("write to String");
-        writeln!(output, "    {d} = add64({d}, temp1_{round});").expect("write to String");
-        writeln!(output, "    {h} = add64(temp1_{round}, temp2_{round});")
-            .expect("write to String");
+        match shader {
+            Shader::Native => {
+                writeln!(
+                    output,
+                    "    let temp1_{round} = {h} + big_sigma1({e}) + (({e} & {f}) ^ ((~{e}) & {g})) + 0x{constant:016x}lu + w{slot};"
+                )?;
+                writeln!(
+                    output,
+                    "    let temp2_{round} = big_sigma0({a}) + (({a} & {b}) ^ ({a} & {c}) ^ ({b} & {c}));"
+                )?;
+                writeln!(output, "    {d} = {d} + temp1_{round};")?;
+                writeln!(output, "    {h} = temp1_{round} + temp2_{round};")?;
+            }
+            Shader::Web => {
+                writeln!(
+                    output,
+                    "    let temp1_{round} = add64(add64(add64({h}, big_sigma1({e})), choice({e}, {f}, {g})), add64(vec2<u32>(0x{high:08x}u, 0x{low:08x}u), w{slot}));"
+                )?;
+                writeln!(
+                    output,
+                    "    let temp2_{round} = add64(big_sigma0({a}), majority({a}, {b}, {c}));"
+                )?;
+                writeln!(output, "    {d} = add64({d}, temp1_{round});")?;
+                writeln!(output, "    {h} = add64(temp1_{round}, temp2_{round});")?;
+            }
+            Shader::Cuda => {
+                writeln!(
+                    output,
+                    "    unsigned long long temp1_{round} = {h} + big_sigma1({e}) + (({e} & {f}) ^ ((~{e}) & {g})) + 0x{constant:016x}ull + w{slot};"
+                )?;
+                writeln!(
+                    output,
+                    "    unsigned long long temp2_{round} = big_sigma0({a}) + (({a} & {b}) ^ ({a} & {c}) ^ ({b} & {c}));"
+                )?;
+                writeln!(output, "    {d} = {d} + temp1_{round};")?;
+                writeln!(output, "    {h} = temp1_{round} + temp2_{round};")?;
+            }
+        }
         state = [h, a, b, c, d, e, f, g];
     }
 
-    let high = sha512_constants::IV[0] >> 32;
-    let low = sha512_constants::IV[0] & 0xffff_ffff;
-    writeln!(
-        output,
-        "    return add64({}, vec2<u32>(0x{high:08x}u, 0x{low:08x}u));",
-        state[0]
-    )
-    .expect("write to String");
-    output
-}
-
-fn cuda_rounds() -> String {
-    let mut output = String::new();
-    let mut state = ["a", "b", "c", "d", "e", "f", "g", "h"];
-
-    for (round, constant) in sha512_constants::ROUND_CONSTANTS.iter().enumerate() {
-        let slot = round & 15;
-        if round >= 16 {
+    match shader {
+        Shader::Native => writeln!(
+            output,
+            "    return {} + 0x{:016x}lu;",
+            state[0],
+            sha512_constants::IV[0]
+        )?,
+        Shader::Web => {
+            let high = sha512_constants::IV[0] >> 32;
+            let low = sha512_constants::IV[0] & 0xffff_ffff;
             writeln!(
                 output,
-                "    w{slot} = small_sigma1(w{}) + w{} + small_sigma0(w{}) + w{slot};",
-                (round + 14) & 15,
-                (round + 9) & 15,
-                (round + 1) & 15
-            )
-            .expect("write to String");
+                "    return add64({}, vec2<u32>(0x{high:08x}u, 0x{low:08x}u));",
+                state[0]
+            )?;
         }
-        let [a, b, c, d, e, f, g, h] = state;
-        writeln!(output, "    unsigned long long temp1_{round} = {h} + big_sigma1({e}) + (({e} & {f}) ^ ((~{e}) & {g})) + 0x{constant:016x}ull + w{slot};").expect("write to String");
-        writeln!(
+        Shader::Cuda => writeln!(
             output,
-            "    unsigned long long temp2_{round} = big_sigma0({a}) + (({a} & {b}) ^ ({a} & {c}) ^ ({b} & {c}));"
-        )
-        .expect("write to String");
-        writeln!(output, "    {d} = {d} + temp1_{round};").expect("write to String");
-        writeln!(output, "    {h} = temp1_{round} + temp2_{round};").expect("write to String");
-        state = [h, a, b, c, d, e, f, g];
+            "    return {} + 0x{:016x}ull;",
+            state[0],
+            sha512_constants::IV[0]
+        )?,
     }
 
-    writeln!(
-        output,
-        "    return {} + 0x{:016x}ull;",
-        state[0],
-        sha512_constants::IV[0]
-    )
-    .expect("write to String");
-    output
+    Ok(output)
 }

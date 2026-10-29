@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
-pub enum BackendRequest {
+pub(super) enum BackendRequest {
     Auto,
     Webgpu,
     WasmSimd,
@@ -11,7 +11,7 @@ pub enum BackendRequest {
 
 #[derive(Clone, Copy, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct SearchRequest {
+pub(super) struct SearchRequest {
     pub commit: u32,
     pub node_suffix: u32,
     pub difficulty: u32,
@@ -26,14 +26,14 @@ pub struct SearchRequest {
 
 #[derive(Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
-pub enum CoordinatorCommand {
+pub(super) enum CoordinatorCommand {
     Start { request: SearchRequest },
     Stop,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
-pub enum CpuKernel {
+pub(super) enum CpuKernel {
     Scalar,
     Simd,
 }
@@ -44,7 +44,7 @@ pub enum CpuKernel {
     rename_all = "camelCase",
     rename_all_fields = "camelCase"
 )]
-pub enum SearchEvent {
+pub(super) enum SearchEvent {
     Ready,
     Prepared {
         backend: &'static str,

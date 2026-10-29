@@ -1,8 +1,8 @@
 use super::*;
 
 const CONFIG: CandidateConfig = CandidateConfig {
-    commit: 0xeb366895,
-    node_suffix: 0xebac62b9,
+    commit: 0xeb36_6895,
+    node_suffix: 0xebac_62b9,
 };
 
 #[test]

@@ -1,3 +1,5 @@
+#![allow(clippy::pub_use)]
+
 #[cfg(feature = "wasm-controller")]
 pub use wasm_bindgen_rayon::init_thread_pool;
 

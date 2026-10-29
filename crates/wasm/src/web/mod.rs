@@ -14,10 +14,12 @@ mod protocol;
 mod search_runner;
 
 #[wasm_bindgen(start)]
+#[allow(clippy::single_call_fn, unreachable_pub)]
 pub fn start() {
     console_error_panic_hook::set_once();
 }
 
+#[allow(clippy::single_call_fn)]
 pub(crate) fn search_scalar_batch(
     commit: u32,
     node_suffix: u32,
@@ -51,6 +53,7 @@ pub(crate) fn search_simd_batch(
     search_simd_range(base, end, config, leading_zero_bits).unwrap_or(u64::MAX)
 }
 
+#[allow(clippy::single_call_fn)]
 pub(crate) fn result_details(commit: u32, node_suffix: u32, index: u64) -> (String, String) {
     let config = CandidateConfig {
         commit,
@@ -61,8 +64,12 @@ pub(crate) fn result_details(commit: u32, node_suffix: u32, index: u64) -> (Stri
     let digits = b"0123456789abcdef";
     let mut hash_prefix = String::with_capacity(20);
     for &byte in &hash[..10] {
-        hash_prefix.push(char::from(digits[usize::from(byte >> 4)]));
-        hash_prefix.push(char::from(digits[usize::from(byte & 0x0f)]));
+        hash_prefix.push(char::from(
+            *digits.get(usize::from(byte >> 4)).unwrap_or(&b'0'),
+        ));
+        hash_prefix.push(char::from(
+            *digits.get(usize::from(byte & 0x0f)).unwrap_or(&b'0'),
+        ));
     }
     (uuid, hash_prefix)
 }
@@ -84,6 +91,7 @@ fn search_simd_range(base: u64, end: u64, config: CandidateConfig, bits: u32) ->
     (vector_end..end).find(|&tail| scalar_matches(tail, config, bits))
 }
 
+#[allow(clippy::single_call_fn)]
 fn scalar_matches(index: u64, config: CandidateConfig, bits: u32) -> bool {
     let word = candidate::digest_word(&candidate::digest(index, config));
     candidate::matches_leading_zero_bits(word, bits)

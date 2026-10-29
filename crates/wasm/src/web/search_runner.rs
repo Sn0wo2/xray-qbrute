@@ -12,8 +12,9 @@ use super::result_details;
 const CPU_BATCH_SIZE: u64 = 1 << 18;
 const CPU_TASK_SIZE: u32 = 1 << 12;
 
+#[allow(clippy::multiple_inherent_impl)]
 impl Controller {
-    pub async fn run_cpu(
+    pub(super) async fn run_cpu(
         &self,
         request: SearchRequest,
         kernel: CpuKernel,
@@ -21,7 +22,7 @@ impl Controller {
         fallbacks: Vec<String>,
     ) -> Result<(), String> {
         self.debug(&format!("CPU search begin kernel={kernel:?}"));
-        let mut base = 0u64;
+        let mut base = 0_u64;
         while base < request.max_index {
             if self.cancelled() {
                 self.debug(&format!("CPU search stopped processed={base}"));
@@ -92,7 +93,7 @@ impl Controller {
     }
 
     #[cfg(feature = "wasm-webgpu")]
-    pub async fn run_gpu(
+    pub(super) async fn run_gpu(
         &self,
         request: SearchRequest,
         started: f64,
@@ -100,8 +101,8 @@ impl Controller {
     ) -> Result<(), String> {
         self.debug("WebGPU search begin");
         let session = self.prepare_gpu(request).await?;
-        let mut base = 0u64;
-        let mut evaluated = 0u64;
+        let mut base = 0_u64;
+        let mut evaluated = 0_u64;
         while base < request.max_index {
             if self.cancelled() {
                 self.debug(&format!(
@@ -186,15 +187,16 @@ impl Controller {
     }
 }
 
+#[allow(clippy::single_call_fn)]
 async fn yield_to_event_loop(scope: &DedicatedWorkerGlobalScope) -> Result<(), String> {
     let promise = js_sys::Promise::new(&mut |resolve, _reject| {
         let callback = Closure::once(move || {
-            let _ = resolve.call0(&JsValue::UNDEFINED);
+            drop(resolve.call0(&JsValue::UNDEFINED));
         });
-        let _ = scope.set_timeout_with_callback_and_timeout_and_arguments_0(
+        drop(scope.set_timeout_with_callback_and_timeout_and_arguments_0(
             callback.as_ref().unchecked_ref(),
             0,
-        );
+        ));
         callback.forget();
     });
     JsFuture::from(promise)
@@ -203,7 +205,7 @@ async fn yield_to_event_loop(scope: &DedicatedWorkerGlobalScope) -> Result<(), S
         .map_err(|error| format!("event-loop yield failed: {error:?}"))
 }
 
-pub fn now(scope: &DedicatedWorkerGlobalScope) -> f64 {
+pub(super) fn now(scope: &DedicatedWorkerGlobalScope) -> f64 {
     scope
         .performance()
         .map_or_else(js_sys::Date::now, |value| value.now())

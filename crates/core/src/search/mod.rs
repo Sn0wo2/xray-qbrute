@@ -15,6 +15,7 @@ compile_error!(
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 #[value(rename_all = "kebab-case")]
+#[allow(clippy::exhaustive_enums)]
 pub enum BackendKind {
     Auto,
     #[cfg(feature = "scalar")]
@@ -29,6 +30,7 @@ pub enum BackendKind {
     Cuda,
 }
 
+#[derive(Debug)]
 enum PreparedBackend {
     #[cfg(feature = "scalar")]
     Scalar,
@@ -45,6 +47,8 @@ enum PreparedBackend {
     },
 }
 
+#[derive(Debug)]
+#[allow(clippy::module_name_repetitions)]
 pub struct PreparedSearch {
     backends: Vec<PreparedBackend>,
     fallback_reasons: Vec<String>,
@@ -68,6 +72,7 @@ impl std::fmt::Display for BackendKind {
     }
 }
 
+#[allow(clippy::single_call_fn)]
 fn auto_backends() -> Vec<BackendKind> {
     [
         #[cfg(all(any(target_os = "windows", target_os = "linux"), feature = "cuda"))]
@@ -142,12 +147,14 @@ impl PreparedSearch {
             }
         }
 
-        unreachable!("prepared search always contains at least one backend")
+        Err(SearchError::Runtime(
+            "prepared search contains no backends".to_owned(),
+        ))
     }
 }
 
 impl PreparedBackend {
-    fn kind(&self) -> BackendKind {
+    const fn kind(&self) -> BackendKind {
         match self {
             #[cfg(feature = "scalar")]
             Self::Scalar => BackendKind::Scalar,
@@ -161,6 +168,7 @@ impl PreparedBackend {
     }
 }
 
+#[allow(clippy::single_call_fn)]
 fn prepare_auto(config: &SearchConfig) -> Result<PreparedSearch, SearchError> {
     let mut fallback_reasons = Vec::new();
     let mut backends = Vec::new();
@@ -191,7 +199,9 @@ fn prepare_backend(
     backend: BackendKind,
 ) -> Result<PreparedBackend, SearchError> {
     match backend {
-        BackendKind::Auto => unreachable!("auto is expanded before backend preparation"),
+        BackendKind::Auto => Err(SearchError::InvalidConfig(
+            "auto backend selection must be resolved before backend preparation".to_owned(),
+        )),
         #[cfg(feature = "scalar")]
         BackendKind::Scalar => {
             warm_up_cpu(config, BackendKind::Scalar)?;
@@ -212,7 +222,11 @@ fn prepare_backend(
             let selected = match backend {
                 BackendKind::WgpuVulkan => backend::wgpu::WgpuBackend::Vulkan,
                 BackendKind::WgpuMetal => backend::wgpu::WgpuBackend::Metal,
-                _ => unreachable!("matched WGPU backend"),
+                _ => {
+                    return Err(SearchError::InvalidConfig(
+                        "requested backend is not a WGPU backend".to_owned(),
+                    ));
+                }
             };
             let session = backend::wgpu::WgpuSearchSession::new(selected, *config)?;
             session.warm_up()?;
@@ -255,7 +269,9 @@ fn warm_up_cpu(config: &SearchConfig, backend: BackendKind) -> Result<(), Search
         }
         #[cfg(feature = "avx2")]
         BackendKind::Avx2 => backend::avx2::search(&warm_up_config, &progress).map(|_| ()),
-        _ => unreachable!("CPU warm-up only accepts CPU backends"),
+        _ => Err(SearchError::InvalidConfig(
+            "CPU warm-up only accepts CPU backends".to_owned(),
+        )),
     }
 }
 

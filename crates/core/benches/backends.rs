@@ -1,3 +1,5 @@
+#![allow(clippy::expect_used, clippy::print_stderr)]
+
 use std::hint::black_box;
 use std::sync::Arc;
 use std::time::Duration;
@@ -12,8 +14,8 @@ use xray_qbrute_core::search::{self, BackendKind};
 const CANDIDATE_COUNT: u64 = 1 << 20;
 const CONFIG: SearchConfig = SearchConfig {
     candidate: CandidateConfig {
-        commit: 0xeb366895,
-        node_suffix: 0xebac62b9,
+        commit: 0xeb36_6895,
+        node_suffix: 0xebac_62b9,
     },
     start_index: 0,
     max_index: CANDIDATE_COUNT,
@@ -24,14 +26,7 @@ fn no_progress() -> ProgressReporter {
     Arc::new(|_| {})
 }
 
-#[cfg(feature = "avx2")]
-fn cpu_backend_available(backend: BackendKind) -> bool {
-    if backend == BackendKind::Avx2 {
-        return backend::avx2::is_available();
-    }
-    true
-}
-
+#[allow(clippy::single_call_fn)]
 fn bench_cpu_backends(c: &mut Criterion) {
     #[cfg(feature = "scalar")]
     bench_one_cpu(c, "scalar", BackendKind::Scalar);
@@ -47,7 +42,7 @@ fn bench_one_cpu(c: &mut Criterion, name: &str, backend: BackendKind) {
     group.throughput(Throughput::Elements(CANDIDATE_COUNT));
 
     #[cfg(feature = "avx2")]
-    if !cpu_backend_available(backend) {
+    if backend == BackendKind::Avx2 && !backend::avx2::is_available() {
         eprintln!("Skipping AVX2 benchmark: AVX2 is unavailable");
         return;
     }
@@ -71,7 +66,7 @@ fn bench_one_cpu(c: &mut Criterion, name: &str, backend: BackendKind) {
                     BackendKind::Scalar => "scalar",
                     #[cfg(feature = "avx2")]
                     BackendKind::Avx2 => "avx2-4x",
-                    _ => unreachable!("CPU benchmark only selects CPU backends"),
+                    _ => return,
                 };
                 debug_assert_eq!(outcome.backend_name, expected_name);
                 black_box((outcome.processed, outcome.evaluated, outcome.hit));
@@ -81,6 +76,7 @@ fn bench_one_cpu(c: &mut Criterion, name: &str, backend: BackendKind) {
     group.finish();
 }
 
+#[allow(clippy::single_call_fn)]
 fn bench_wgpu(c: &mut Criterion) {
     #[cfg(feature = "wgpu")]
     {
@@ -111,7 +107,7 @@ fn bench_wgpu(c: &mut Criterion) {
                 let selected = match backend {
                     BackendKind::WgpuVulkan => backend::wgpu::WgpuBackend::Vulkan,
                     BackendKind::WgpuMetal => backend::wgpu::WgpuBackend::Metal,
-                    _ => unreachable!("GPU benchmark selects a WGPU backend"),
+                    _ => return,
                 };
                 black_box(
                     backend::wgpu::WgpuSearchSession::new(selected, CONFIG)
@@ -132,6 +128,7 @@ fn bench_wgpu(c: &mut Criterion) {
     }
 }
 
+#[allow(clippy::single_call_fn)]
 fn bench_cuda(c: &mut Criterion) {
     #[cfg(feature = "cuda")]
     {

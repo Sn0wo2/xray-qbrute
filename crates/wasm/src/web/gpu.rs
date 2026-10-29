@@ -9,7 +9,7 @@ use super::protocol::SearchRequest;
 const WORKGROUP_SIZE: u32 = 128;
 const CANDIDATES_PER_INVOCATION: u32 = 8;
 const CANDIDATES_PER_WORKGROUP: u64 = WORKGROUP_SIZE as u64 * CANDIDATES_PER_INVOCATION as u64;
-pub const GPU_BATCH_SIZE: u64 = 1 << 24;
+pub(super) const GPU_BATCH_SIZE: u64 = 1 << 24;
 const GPU_WARM_UP_SIZE: u32 = 1 << 20;
 
 #[repr(C)]
@@ -28,7 +28,7 @@ struct GpuResult {
     padding: [u32; 3],
 }
 
-pub struct GpuSession {
+pub(super) struct GpuSession {
     device: wgpu::Device,
     queue: wgpu::Queue,
     pipeline: wgpu::ComputePipeline,
@@ -40,7 +40,8 @@ pub struct GpuSession {
 }
 
 impl GpuSession {
-    pub async fn new(request: SearchRequest) -> Result<Self, String> {
+    #[allow(clippy::single_call_fn)]
+    pub(super) async fn new(request: SearchRequest) -> Result<Self, String> {
         if request.debug {
             web_sys::console::debug_1(&"[wasm:webgpu] requesting browser adapter".into());
         }
@@ -151,11 +152,11 @@ impl GpuSession {
         Ok(session)
     }
 
-    pub fn adapter_name(&self) -> &str {
+    pub(super) fn adapter_name(&self) -> &str {
         &self.adapter_name
     }
 
-    pub async fn dispatch(&self, base: u64, count: u32) -> Result<u32, String> {
+    pub(super) async fn dispatch(&self, base: u64, count: u32) -> Result<u32, String> {
         self.queue.write_buffer(
             &self.params,
             0,

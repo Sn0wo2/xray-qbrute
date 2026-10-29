@@ -1,15 +1,22 @@
+#![allow(
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    clippy::panic,
+    clippy::print_stderr
+)]
+
 use std::sync::Arc;
 
 use super::*;
 use crate::candidate;
 
 const CONFIG: CandidateConfig = CandidateConfig {
-    commit: 0xeb366895,
-    node_suffix: 0xebac62b9,
+    commit: 0xeb36_6895,
+    node_suffix: 0xebac_62b9,
 };
 const ALTERNATE_CONFIG: CandidateConfig = CandidateConfig {
-    commit: 0x01234567,
-    node_suffix: 0x89abcdef,
+    commit: 0x0123_4567,
+    node_suffix: 0x89ab_cdef,
 };
 
 #[cfg(target_os = "windows")]
@@ -22,7 +29,7 @@ const TEST_BACKENDS: &[WgpuBackend] = &[WgpuBackend::Metal];
 const TEST_BACKENDS: &[WgpuBackend] = &[WgpuBackend::Vulkan];
 
 fn context_or_skip(backend: WgpuBackend, config: SearchConfig) -> Option<GpuContext> {
-    match create_context(backend, config) {
+    match pollster::block_on(create_context_async(backend, config)) {
         Ok(context) => Some(context),
         Err(SearchError::Unavailable(reason)) => {
             eprintln!("Skipping {} GPU test: {reason}", backend.name());

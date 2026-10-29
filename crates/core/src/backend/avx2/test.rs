@@ -1,10 +1,12 @@
+#![allow(clippy::expect_used, clippy::indexing_slicing)]
+
 use super::*;
 use crate::backend::SearchHit;
 use crate::candidate::CandidateConfig;
 
 const CONFIG: CandidateConfig = CandidateConfig {
-    commit: 0xeb366895,
-    node_suffix: 0xebac62b9,
+    commit: 0xeb36_6895,
+    node_suffix: 0xebac_62b9,
 };
 
 #[test]
@@ -43,7 +45,7 @@ fn avx2_first_words_match_rustcrypto() {
         (1 << 58) - 4,
     ];
     for base in bases {
-        for offset in 0..128u64 {
+        for offset in 0..128_u64 {
             let indices = [
                 base + offset,
                 base + offset + 1,

@@ -64,9 +64,10 @@ fn format_rate(rate_per_second: f64) -> String {
         value /= 1000.0;
         unit += 1;
     }
-    format!("{value:.1} {}", UNITS[unit])
+    format!("{value:.1} {}", UNITS.get(unit).copied().unwrap_or("TH/s"))
 }
 
+#[allow(clippy::single_call_fn)]
 fn format_integer(value: u64) -> String {
     let digits = value.to_string();
     let mut grouped = String::with_capacity(digits.len() + digits.len() / 3);
@@ -79,6 +80,13 @@ fn format_integer(value: u64) -> String {
     grouped
 }
 
+#[allow(
+    clippy::cast_sign_loss,
+    clippy::expect_used,
+    clippy::print_stderr,
+    clippy::print_stdout,
+    clippy::single_call_fn
+)]
 fn run(args: Args) -> Result<(), SearchError> {
     let commit = parse_hex_u32("--commit", &args.commit).map_err(SearchError::InvalidConfig)?;
     let node_suffix =
@@ -224,6 +232,7 @@ fn run(args: Args) -> Result<(), SearchError> {
     Ok(())
 }
 
+#[allow(clippy::print_stderr)]
 fn main() {
     let args = Args::parse();
     if args.difficulty > 64 {

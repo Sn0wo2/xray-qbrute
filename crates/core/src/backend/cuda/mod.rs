@@ -1,3 +1,4 @@
+use std::fmt;
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -39,7 +40,7 @@ struct GpuParams {
 unsafe impl DeviceRepr for GpuParams {}
 
 impl GpuParams {
-    fn new(base: u64, candidate_count: u64) -> Self {
+    const fn new(base: u64, candidate_count: u64) -> Self {
         Self {
             base_lo: base as u32,
             base_hi: (base >> 32) as u32,
@@ -49,6 +50,7 @@ impl GpuParams {
     }
 }
 
+#[allow(clippy::module_name_repetitions)]
 pub struct CudaSearchSession {
     context: Arc<CudaContext>,
     search_kernel: cudarc::driver::CudaFunction,
@@ -58,7 +60,19 @@ pub struct CudaSearchSession {
     leading_zero_bits: u32,
 }
 
+impl fmt::Debug for CudaSearchSession {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CudaSearchSession")
+            .field("commit", &self.commit)
+            .field("node_suffix", &self.node_suffix)
+            .field("leading_zero_bits", &self.leading_zero_bits)
+            .finish_non_exhaustive()
+    }
+}
+
 #[cfg(any(target_os = "windows", target_os = "linux"))]
+#[allow(clippy::single_call_fn)]
 fn locate_cuda_bin_dir() -> Option<PathBuf> {
     let mut roots = Vec::new();
 
@@ -69,8 +83,8 @@ fn locate_cuda_bin_dir() -> Option<PathBuf> {
     }
     #[cfg(target_os = "windows")]
     {
-        for major in 9..=13u32 {
-            for minor in 0..=9u32 {
+        for major in 9..=13_u32 {
+            for minor in 0..=9_u32 {
                 if let Ok(path) = std::env::var(format!("CUDA_PATH_V{major}_{minor}")) {
                     roots.push(PathBuf::from(path));
                 }
@@ -254,7 +268,7 @@ impl CudaSearchSession {
         progress: &ProgressReporter,
     ) -> Result<BackendOutcome, SearchError> {
         let mut base = config.start_index;
-        let mut evaluated = 0u64;
+        let mut evaluated = 0_u64;
         let search_start = Instant::now();
 
         while base < config.max_index {
@@ -280,8 +294,7 @@ impl CudaSearchSession {
                     fallback_reasons: Vec::new(),
                     search_elapsed: Some(search_start.elapsed()),
                     kernel_config: Some(format!(
-                        "block={}, candidates/thread={}",
-                        BLOCK_SIZE, CANDIDATES_PER_INVOCATION
+                        "block={BLOCK_SIZE}, candidates/thread={CANDIDATES_PER_INVOCATION}"
                     )),
                     tuning_elapsed: None,
                 });
@@ -301,8 +314,7 @@ impl CudaSearchSession {
             fallback_reasons: Vec::new(),
             search_elapsed: Some(search_start.elapsed()),
             kernel_config: Some(format!(
-                "block={}, candidates/thread={}",
-                BLOCK_SIZE, CANDIDATES_PER_INVOCATION
+                "block={BLOCK_SIZE}, candidates/thread={CANDIDATES_PER_INVOCATION}"
             )),
             tuning_elapsed: None,
         })
@@ -357,7 +369,9 @@ impl CudaSearchSession {
             SearchError::Runtime(format!("CUDA result readback failed: {error:?}"))
         })?;
 
-        Ok(results[0])
+        results.into_iter().next().ok_or_else(|| {
+            SearchError::Runtime("CUDA result readback returned no values".to_owned())
+        })
     }
 
     fn verify_sha512(&self, candidate: CandidateConfig) -> Result<(), SearchError> {

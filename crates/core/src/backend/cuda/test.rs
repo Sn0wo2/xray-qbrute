@@ -1,10 +1,12 @@
+#![allow(clippy::expect_used, clippy::panic, clippy::print_stderr)]
+
 use super::*;
 use crate::backend::SearchHit;
 use crate::candidate::{self, CandidateConfig};
 
 const CONFIG: CandidateConfig = CandidateConfig {
-    commit: 0xeb366895,
-    node_suffix: 0xebac62b9,
+    commit: 0xeb36_6895,
+    node_suffix: 0xebac_62b9,
 };
 
 fn session_or_skip() -> Option<CudaSearchSession> {
@@ -31,7 +33,7 @@ fn cuda_search_reports_a_valid_hit() {
     };
     session.warm_up().expect("CUDA warm-up must succeed");
 
-    let progress: ProgressReporter = std::sync::Arc::new(|_| {});
+    let progress: ProgressReporter = Arc::new(|_| {});
     let config = SearchConfig {
         candidate: CONFIG,
         start_index: 0,

@@ -32,6 +32,7 @@ struct GpuKey {
 type GpuCacheEntry = (GpuKey, Rc<GpuSession>);
 
 #[wasm_bindgen]
+#[allow(clippy::single_call_fn, trivial_casts, unreachable_pub)]
 pub fn install_coordinator() -> Result<(), JsValue> {
     let scope: DedicatedWorkerGlobalScope = js_sys::global().dyn_into()?;
     let controller = Rc::new(Controller {
@@ -137,9 +138,13 @@ impl Controller {
                     name: format!("WASM Rayon · {} threads", request.threads),
                 });
             }
-            BackendRequest::Auto => unreachable!("auto is resolved before execution"),
+            BackendRequest::Auto => {
+                return Err("auto backend selection was not resolved".to_owned());
+            }
             #[cfg(not(feature = "wasm-webgpu"))]
-            BackendRequest::Webgpu => unreachable!("WebGPU is rejected before execution"),
+            BackendRequest::Webgpu => {
+                return Err("WebGPU is unavailable in this build".to_owned());
+            }
         }
         self.post(&SearchEvent::Prepared {
             backend: backend_name(backend),
@@ -183,9 +188,9 @@ impl Controller {
                 self.run_cpu(request, CpuKernel::Scalar, started, fallbacks)
                     .await
             }
-            BackendRequest::Auto => unreachable!("auto is resolved before execution"),
+            BackendRequest::Auto => Err("auto backend selection was not resolved".to_owned()),
             #[cfg(not(feature = "wasm-webgpu"))]
-            BackendRequest::Webgpu => unreachable!("WebGPU is rejected before execution"),
+            BackendRequest::Webgpu => Err("WebGPU is unavailable in this build".to_owned()),
         }
     }
 
@@ -213,7 +218,7 @@ impl Controller {
 
     pub(super) fn post(&self, event: &SearchEvent) {
         if let Ok(value) = serde_wasm_bindgen::to_value(event) {
-            let _ = self.scope.post_message(&value);
+            drop(self.scope.post_message(&value));
         }
     }
 
@@ -221,7 +226,7 @@ impl Controller {
         self.cancelled.get()
     }
 
-    pub(super) fn scope(&self) -> &DedicatedWorkerGlobalScope {
+    pub(super) const fn scope(&self) -> &DedicatedWorkerGlobalScope {
         &self.scope
     }
 
@@ -232,7 +237,7 @@ impl Controller {
     }
 }
 
-fn backend_name(backend: BackendRequest) -> &'static str {
+const fn backend_name(backend: BackendRequest) -> &'static str {
     match backend {
         BackendRequest::Auto => "auto",
         BackendRequest::Webgpu => "webgpu",

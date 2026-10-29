@@ -6,7 +6,7 @@ use super::{BackendOutcome, ProgressReporter, SEARCH_CHUNK_SIZE, SearchConfig, S
 
 pub fn search(config: &SearchConfig, progress: &ProgressReporter) -> BackendOutcome {
     let mut start = config.start_index;
-    let mut evaluated = 0u64;
+    let mut evaluated = 0_u64;
 
     while start < config.max_index {
         let end = (start + SEARCH_CHUNK_SIZE).min(config.max_index);
@@ -16,14 +16,11 @@ pub fn search(config: &SearchConfig, progress: &ProgressReporter) -> BackendOutc
             .into_par_iter()
             .filter_map(|i| {
                 let hash = candidate::digest(i, config.candidate);
-                if candidate::matches_leading_zero_bits(
+                candidate::matches_leading_zero_bits(
                     candidate::digest_word(&hash),
                     config.leading_zero_bits,
-                ) {
-                    Some(i)
-                } else {
-                    None
-                }
+                )
+                .then_some(i)
             })
             .min();
 
