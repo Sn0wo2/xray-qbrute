@@ -147,7 +147,7 @@ impl PreparedSearch {
 }
 
 impl PreparedBackend {
-    fn kind(&self) -> BackendKind {
+    const fn kind(&self) -> BackendKind {
         match self {
             #[cfg(feature = "scalar")]
             Self::Scalar => BackendKind::Scalar,

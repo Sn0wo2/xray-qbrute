@@ -1,6 +1,6 @@
 use sha2::{Digest, Sha512};
 
-pub const MAX_UUID_INDEX: u64 = 1u64 << 58;
+pub const MAX_UUID_INDEX: u64 = 1_u64 << 58;
 pub const DEFAULT_DIFFICULTY_BITS: u32 = 33;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -25,7 +25,7 @@ pub fn candidate_words(index: u64, config: CandidateConfig) -> [u64; 2] {
 
 pub fn candidate_bytes(index: u64, config: CandidateConfig) -> [u8; 16] {
     let words = candidate_words(index, config);
-    let mut bytes = [0u8; 16];
+    let mut bytes = [0_u8; 16];
     bytes[..8].copy_from_slice(&words[0].to_be_bytes());
     bytes[8..].copy_from_slice(&words[1].to_be_bytes());
     bytes
@@ -40,7 +40,7 @@ pub fn digest_word(hash: &[u8; 64]) -> u64 {
     u64::from_be_bytes(hash[..8].try_into().expect("SHA-512 digest has 64 bytes"))
 }
 
-pub fn matches_leading_zero_bits(word: u64, bits: u32) -> bool {
+pub const fn matches_leading_zero_bits(word: u64, bits: u32) -> bool {
     if bits == 0 {
         return true;
     }

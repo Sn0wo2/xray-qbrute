@@ -39,7 +39,7 @@ struct GpuParams {
 unsafe impl DeviceRepr for GpuParams {}
 
 impl GpuParams {
-    fn new(base: u64, candidate_count: u64) -> Self {
+    const fn new(base: u64, candidate_count: u64) -> Self {
         Self {
             base_lo: base as u32,
             base_hi: (base >> 32) as u32,
@@ -254,7 +254,7 @@ impl CudaSearchSession {
         progress: &ProgressReporter,
     ) -> Result<BackendOutcome, SearchError> {
         let mut base = config.start_index;
-        let mut evaluated = 0u64;
+        let mut evaluated = 0_u64;
         let search_start = Instant::now();
 
         while base < config.max_index {
@@ -280,8 +280,7 @@ impl CudaSearchSession {
                     fallback_reasons: Vec::new(),
                     search_elapsed: Some(search_start.elapsed()),
                     kernel_config: Some(format!(
-                        "block={}, candidates/thread={}",
-                        BLOCK_SIZE, CANDIDATES_PER_INVOCATION
+                        "block={BLOCK_SIZE}, candidates/thread={CANDIDATES_PER_INVOCATION}"
                     )),
                     tuning_elapsed: None,
                 });
@@ -301,8 +300,7 @@ impl CudaSearchSession {
             fallback_reasons: Vec::new(),
             search_elapsed: Some(search_start.elapsed()),
             kernel_config: Some(format!(
-                "block={}, candidates/thread={}",
-                BLOCK_SIZE, CANDIDATES_PER_INVOCATION
+                "block={BLOCK_SIZE}, candidates/thread={CANDIDATES_PER_INVOCATION}"
             )),
             tuning_elapsed: None,
         })

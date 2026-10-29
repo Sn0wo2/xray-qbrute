@@ -31,7 +31,7 @@ fn cuda_search_reports_a_valid_hit() {
     };
     session.warm_up().expect("CUDA warm-up must succeed");
 
-    let progress: ProgressReporter = std::sync::Arc::new(|_| {});
+    let progress: ProgressReporter = Arc::new(|_| {});
     let config = SearchConfig {
         candidate: CONFIG,
         start_index: 0,
