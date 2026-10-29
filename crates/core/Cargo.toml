@@ -30,3 +30,6 @@ criterion.workspace = true
 [[bench]]
 name = "backends"
 harness = false
+
+[lints]
+workspace = true

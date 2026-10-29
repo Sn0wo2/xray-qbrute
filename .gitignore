@@ -1,6 +1,8 @@
 debug
 target
 dist
+node_modules/
+.zig-cache/
 *.rs.bk
 *.pdb
 mutants.out*/

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 const { createHash } = require("node:crypto")
 const { spawnSync } = require("node:child_process")
+const { copyFileSync, mkdirSync, rmSync } = require("node:fs")
 const { resolve } = require("node:path")
 
 const rustc = spawnSync("rustc", ["-vV"], { encoding: "utf8" })
@@ -16,8 +17,7 @@ if (!host) {
 
 const args = process.argv.slice(2)
 const targetIndex = args.findIndex((arg) => arg === "--target" || arg.startsWith("--target="))
-const targetArg = args[targetIndex]
-const target = targetArg === "--target" ? args[targetIndex + 1] : targetArg?.slice(9)
+const target = args[targetIndex] === "--target" ? args[targetIndex + 1] : args[targetIndex]?.slice(9)
 let env = process.env
 if (args[0] === "build" || args[0] === "zigbuild") args.shift()
 let command = "build"
@@ -35,9 +35,29 @@ if (target === "x86_64-pc-windows-gnu" && target !== host) {
 }
 args.unshift(command)
 
-process.exit(
-  spawnSync("cargo", args, {
-    stdio: "inherit",
-    env,
-  }).status ?? 1,
-)
+const binIndex = args.findIndex((arg) => arg === "--bin" || arg.startsWith("--bin="))
+const bin = args[binIndex] === "--bin" ? args[binIndex + 1] : args[binIndex]?.slice(6)
+const targetPrefix = target?.split(".", 1)[0]
+const abi = targetPrefix?.slice(targetPrefix.lastIndexOf("-") + 1)
+const outputTarget = target && abi?.startsWith("gnu") && abi !== "gnullvm" ? targetPrefix : target
+if (process.env.BUILD_PROFILE === "debug" && (!bin || !outputTarget)) {
+  console.error("ERROR: debug builds require a binary name and target")
+  process.exit(1)
+}
+if (process.env.BUILD_PROFILE === "debug") {
+  const release = args.indexOf("--release")
+  if (release !== -1) args.splice(release, 1)
+  args.push("--profile=dev")
+}
+if (process.env.BUILD_PROFILE === "debug") {
+  rmSync(resolve("target", outputTarget, "release", `${bin}${target?.includes("windows") ? ".exe" : ""}`), { force: true })
+}
+const result = spawnSync("cargo", args, { stdio: "inherit", env })
+if (process.env.BUILD_PROFILE === "debug" && result.status === 0) {
+  mkdirSync(resolve("target", outputTarget, "release"), { recursive: true })
+  copyFileSync(
+    resolve("target", outputTarget, "debug", `${bin}${target?.includes("windows") ? ".exe" : ""}`),
+    resolve("target", outputTarget, "release", `${bin}${target?.includes("windows") ? ".exe" : ""}`),
+  )
+}
+process.exit(result.status ?? 1)

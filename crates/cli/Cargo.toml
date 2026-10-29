@@ -24,3 +24,6 @@ scalar = ["xray-qbrute-core/scalar"]
 avx2 = ["xray-qbrute-core/avx2"]
 wgpu = ["xray-qbrute-core/wgpu"]
 cuda = ["xray-qbrute-core/cuda"]
+
+[lints]
+workspace = true

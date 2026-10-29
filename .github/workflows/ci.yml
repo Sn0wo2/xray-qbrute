@@ -17,9 +17,9 @@ jobs:
     name: Checks
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
+      pull-requests: write
     outputs:
-      autofix: ${{ steps.patch.outputs.changed }}
       has_binaries: ${{ steps.metadata.outputs.has_binaries }}
       has_library: ${{ steps.metadata.outputs.has_library }}
     steps:
@@ -37,19 +37,15 @@ jobs:
           cache-workspace-crates: true
           save-if: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
 
-      - uses: actions/github-script@v9
+      - name: Collect workspace metadata
         id: metadata
-        with:
-          script: |
-            const { packages } = JSON.parse(
-              (await exec.getExecOutput("cargo", ["metadata", "--no-deps", "--format-version", "1"], { silent: true })).stdout,
-            )
-            core.setOutput("has_binaries", packages.some((pkg) => pkg.targets.some((target) => target.kind.includes("bin"))))
-            core.setOutput("has_library", packages.some((pkg) => pkg.targets.some((target) => target.kind.includes("lib"))))
+        run: node scripts/collect-ci-metadata.js
 
       - name: Apply lint fixes
         continue-on-error: true
-        run: make lint-fix
+        run: |
+          cargo fmt-all
+          cargo lint-fix
 
       - name: Save lint fixes
         id: patch
@@ -61,42 +57,38 @@ jobs:
             git restore --worktree -- '*.rs'
           fi
 
-      - uses: actions/upload-artifact@v7
-        if: ${{ !cancelled() && steps.patch.outputs.changed == 'true' }}
-        with:
-          name: lint-fixes
-          path: ${{ runner.temp }}/lint-fixes.patch
-          retention-days: 7
-          if-no-files-found: error
-
-      - run: make lint check check-no-default test test-all test-no-default doc
+      - run: |
+          cargo fmt-check
+          cargo lint
+          cargo check-ws
+          cargo check-no-default
+          cargo test-ws
+          cargo test-all-features
+          cargo test-no-default
+          cargo doc-all
 
       - uses: EmbarkStudios/cargo-deny-action@v2
 
-  autofix:
-    needs: check
-    if: >-
-      !cancelled() && needs.check.outputs.autofix == 'true' &&
-      (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      pull-requests: write
-    steps:
-      - uses: actions/checkout@v7
+      - name: Checkout the branch for autofix
+        id: autofix_checkout
+        if: >-
+          !cancelled() && steps.patch.outputs.changed == 'true' &&
+          (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+        uses: actions/checkout@v7
         with:
           ref: ${{ github.head_ref || github.ref_name }}
           persist-credentials: false
 
-      - uses: actions/download-artifact@v8
-        with:
-          name: lint-fixes
-          path: ${{ runner.temp }}/lint-fixes
+      - name: Apply lint fixes
+        id: apply_fix
+        if: ${{ !cancelled() && steps.autofix_checkout.outcome == 'success' }}
+        run: git apply --include='*.rs' "$RUNNER_TEMP/lint-fixes.patch"
 
-      - run: git apply --include='*.rs' "$RUNNER_TEMP/lint-fixes/lint-fixes.patch"
-
-      - uses: peter-evans/create-pull-request@v8
+      - name: Create autofix pull request
+        if: ${{ !cancelled() && steps.apply_fix.outcome == 'success' }}
+        uses: peter-evans/create-pull-request@v8
         with:
+          token: ${{ secrets.GITHUB_TOKEN }}
           commit-message: "chore(autofix): formatting and lint"
           branch: auto-fix/rust-${{ github.event.pull_request.number || github.ref_name }}
           delete-branch: true
@@ -106,11 +98,75 @@ jobs:
           add-paths: "**/*.rs"
 
   build:
+    name: Build ${{ matrix.platform }}
     needs: check
     if: needs.check.outputs.has_binaries == 'true'
-    uses: ./.github/workflows/build.yml
+    runs-on: ${{ matrix.os }}
     permissions:
       contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-windows
+            os: ubuntu-latest
+            targets: x86_64-unknown-linux-gnu,x86_64-pc-windows-gnu,aarch64-unknown-linux-gnu,armv7-unknown-linux-gnueabihf
+            artifacts: |
+              dist/*.tar.gz
+              dist/*.zip
+          - platform: macos
+            os: macos-latest
+            targets: x86_64-apple-darwin,aarch64-apple-darwin
+            artifacts: dist/*_darwin_*.tar.gz
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: ./.github/actions/build
+        with:
+          snapshot: 'true'
+          profile: debug
+          platform: ${{ matrix.platform }}
+          targets: ${{ matrix.targets }}
+          artifacts: ${{ matrix.artifacts }}
+
+  web:
+    name: WebAssembly browser build
+    needs: check
+    if: needs.check.outputs.has_binaries == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          targets: wasm32-unknown-unknown
+          components: rust-src
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: wasm-web
+          workspaces: '. -> target'
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      - name: Install wasm-bindgen
+        run: cargo install wasm-bindgen-cli --version 0.2.127 --locked
+
+      - name: Build browser packages
+        run: node scripts/build.ts wasm
+
+      - name: Verify browser artifact
+        run: node scripts/build.ts verify
 
   geiger:
     name: Unsafe code report

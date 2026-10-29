@@ -69,4 +69,42 @@ checksum:
   disable: true
 
 changelog:
-  disable: true
+  use: github
+  groups:
+    - title: 「Features」
+      regexp: "^.*feat(?:\\([^)]+\\))?:+.*$"
+    - title: 「Bug Fixes」
+      regexp: "^.*fix(?:\\([^)]+\\))?:+.*$"
+      order: 1
+    - title: 「Performance Improvements」
+      regexp: "^.*perf(?:\\([^)]+\\))?:+.*$"
+      order: 2
+    - title: 「Documentation」
+      regexp: "^.*docs(?:\\([^)]+\\))?:+.*$"
+      order: 3
+    - title: 「Maintenance & Chores」
+      regexp: "^.*chore(?:\\([^)]+\\))?:+.*$"
+      order: 4
+    - title: 「Code Refactoring」
+      regexp: "^.*refactor(?:\\([^)]+\\))?:+.*$"
+      order: 5
+    - title: 「Tests」
+      regexp: "^.*test(?:\\([^)]+\\))?:+.*$"
+      order: 6
+    - title: 「Dependency Updates」
+      regexp: "^.*deps(?:\\([^)]+\\))?:+.*$"
+      order: 7
+    - title: 「Others」
+      order: 999
+
+release:
+  prerelease: auto
+  replace_existing_artifacts: true
+  header: |
+    {{ if .Prerelease }}
+    > ⚠️ **WARNING: This is a pre-release version and is not recommended for production use.**
+    {{ end }}
+  extra_files:
+    - glob: dist/*.tar.gz
+    - glob: dist/*.zip
+    - glob: dist/checksums.txt

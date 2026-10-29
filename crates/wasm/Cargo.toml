@@ -40,3 +40,6 @@ futures-channel = { workspace = true, optional = true }
 wgpu = { workspace = true, features = ["std", "webgpu", "wgsl"], optional = true }
 wasm-bindgen-rayon = { workspace = true, optional = true }
 rayon = { workspace = true, features = ["web_spin_lock"], optional = true }
+
+[lints]
+workspace = true

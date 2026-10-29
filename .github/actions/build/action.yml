@@ -1,0 +1,95 @@
+name: Build release archives
+description: Build and package the cross-platform Rust binaries
+inputs:
+  version:
+    description: Release version, if this is not a snapshot build
+    required: false
+    default: ''
+  snapshot:
+    description: Whether to build a non-publishing snapshot
+    required: false
+    default: 'true'
+  profile:
+    description: Cargo build profile
+    required: false
+    default: release
+  platform:
+    description: Build platform group
+    required: true
+  targets:
+    description: Rust targets to install
+    required: true
+  artifacts:
+    description: Archive paths to upload
+    required: true
+runs:
+  using: composite
+  steps:
+    - uses: dtolnay/rust-toolchain@stable
+      with:
+        targets: ${{ inputs.targets }}
+
+    - uses: taiki-e/install-action@v2
+      if: ${{ inputs.snapshot != 'true' }}
+      with:
+        tool: cargo-edit
+
+    - name: Sync workspace version
+      if: ${{ inputs.snapshot != 'true' }}
+      run: cargo set-version --workspace "$VERSION"
+      env:
+        VERSION: ${{ inputs.version }}
+      shell: bash
+
+    - uses: Swatinem/rust-cache@v2
+      with:
+        shared-key: build-${{ inputs.platform }}${{ inputs.snapshot == 'true' && '-snapshot' || '' }}
+        cache-workspace-crates: true
+        save-if: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+
+    - uses: taiki-e/install-action@v2
+      with:
+        tool: cargo-zigbuild
+
+    - name: Install mingw-w64
+      if: runner.os == 'Linux'
+      run: sudo apt-get update && sudo apt-get install -y mingw-w64
+      shell: bash
+
+    - uses: mlugg/setup-zig@v2
+
+    - name: Ensure build script is executable
+      run: chmod +x scripts/cargo-or-zigbuild.js
+      shell: bash
+
+    - name: Build and package archives
+      uses: goreleaser/goreleaser-action@v7
+      with:
+        args: release --clean ${{ inputs.snapshot == 'true' && '--snapshot' || '--skip=publish,validate' }}
+      env:
+        BUILD_PLATFORM: ${{ inputs.platform }}
+        BUILD_PROFILE: ${{ inputs.profile }}
+        GORELEASER_CURRENT_TAG: ${{ inputs.version && format('v{0}', inputs.version) }}
+        GITHUB_TOKEN: ${{ github.token }}
+
+    - uses: actions/upload-artifact@v7
+      with:
+        name: ${{ github.event.repository.name }}-${{ inputs.platform }}-builds
+        path: ${{ inputs.artifacts }}
+        compression-level: 0
+        if-no-files-found: error
+        retention-days: ${{ inputs.snapshot == 'true' && 7 || 30 }}
+
+    - name: Stage container binaries
+      if: ${{ inputs.platform == 'linux-windows' && inputs.snapshot != 'true' }}
+      run: node scripts/stage-container-binaries.js
+      shell: bash
+
+    - uses: actions/upload-artifact@v7
+      if: ${{ inputs.platform == 'linux-windows' && inputs.snapshot != 'true' }}
+      with:
+        name: container-binaries
+        path: container-context
+        compression-level: 0
+        if-no-files-found: error
+        retention-days: 1

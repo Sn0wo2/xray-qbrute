@@ -1,3 +1,22 @@
+[alias]
+fmt-all = "fmt --all"
+fmt-check = "fmt --all -- --check"
+check-ws = "check --workspace --all-targets"
+check-all-features = "check --workspace --all-targets --all-features"
+check-no-default = "check --workspace --all-targets --no-default-features --features scalar"
+lint = "clippy --workspace --all-targets --all-features -- -D warnings"
+lint-fix = "clippy --workspace --all-targets --all-features --fix --allow-dirty --allow-staged"
+test-ws = "test --workspace"
+test-all-features = "test --workspace --all-features"
+test-no-default = "test --workspace --no-default-features --features scalar"
+doc-all = "doc --workspace --no-deps --all-features"
+security = "deny check"
+build-ws = "build --workspace"
+publish-dry = "publish --dry-run --allow-dirty"
+
+[env]
+RUSTDOCFLAGS = "-D warnings"
+
 [target.wasm32-unknown-unknown]
 rustflags = [
   "-C",
