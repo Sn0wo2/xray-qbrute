@@ -14,7 +14,7 @@
 
 ## WASM
 
-  由 CI/CD 自动部署至 [GitHub Pages](https://xray-qbrute.0wo.cc)
+  [GitHub Pages](https://xray-qbrute.0wo.cc)
 
 ## Thanks
 
@@ -25,4 +25,4 @@
 ## Contribution
 
 - [@XiaoQing235](https://github.com/XiaoQing235) 贡献的 wgpu & avx2 硬件加速 [#1](https://github.com/Sn0wo2/xray-qbrute/pull/1) [#3](https://github.com/Sn0wo2/xray-qbrute/pull/3)
-- [@Terminal-Void](https://github.com/Terminal-Void) 贡献的 MacOS Metal 管线硬件加速支持 [#2](https://github.com/Sn0wo2/xray-qbrute/pull/2)
+- [@Terminal-Void](https://github.com/Terminal-Void) 贡献的 macOS Metal 管线硬件加速支持 [#2](https://github.com/Sn0wo2/xray-qbrute/pull/2)
