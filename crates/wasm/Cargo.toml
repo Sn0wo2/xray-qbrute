@@ -16,19 +16,27 @@ wasm-controller = [
   "dep:futures-channel",
   "dep:wasm-bindgen-rayon",
   "dep:rayon",
+  "dep:hex",
+  "dep:uuid",
+  "dep:serde-wasm-bindgen",
+  "dep:serde",
+  "dep:js-sys",
+  "dep:web-sys",
 ]
-wasm-webgpu = ["wasm-controller", "dep:wgpu"]
+wasm-webgpu = ["wasm-controller", "dep:wgpu", "dep:bytemuck"]
 wasm-simd = ["xray-qbrute-core/wasm-simd"]
 
 [dependencies]
 xray-qbrute-core = { path = "../core", default-features = false }
-bytemuck.workspace = true
+bytemuck = { workspace = true, optional = true }
+hex = { workspace = true, optional = true }
+uuid = { workspace = true, optional = true }
 wasm-bindgen.workspace = true
 console_error_panic_hook.workspace = true
-serde.workspace = true
-serde-wasm-bindgen.workspace = true
-js-sys.workspace = true
-web-sys = { workspace = true, features = [
+serde = { workspace = true, optional = true }
+serde-wasm-bindgen = { workspace = true, optional = true }
+js-sys = { workspace = true, optional = true }
+web-sys = { workspace = true, optional = true, features = [
   "DedicatedWorkerGlobalScope",
   "console",
   "MessageEvent",

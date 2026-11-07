@@ -164,13 +164,16 @@ unescaped_backticks = "warn"
 
 [workspace.dependencies]
 sha2 = "0.11.1"
+thiserror = "2.0.21"
 bytemuck = { version = "1.25.2", features = ["derive"] }
 rayon = "1.12.0"
 wgpu = { version = "30.0.1", default-features = false }
 pollster = "1.0.1"
 clap = { version = "4.6.7", features = ["derive"] }
 indicatif = "0.18.6"
+num-format = "0.4.4"
 hex = "0.4.3"
+uuid = { version = "1.29.1", default-features = false, features = ["std"] }
 criterion = "0.8.2"
 wasm-bindgen = "=0.2.127"
 console_error_panic_hook = "0.1.7"

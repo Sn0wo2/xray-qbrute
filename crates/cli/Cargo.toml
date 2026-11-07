@@ -14,7 +14,9 @@ doc = false
 xray-qbrute-core = { path = "../core", default-features = false }
 clap.workspace = true
 indicatif.workspace = true
+num-format.workspace = true
 hex.workspace = true
+uuid.workspace = true
 rayon.workspace = true
 ctrlc = "3.5.2"
 

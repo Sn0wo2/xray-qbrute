@@ -124,4 +124,4 @@ __global__ void hash_main(
     hash_results[gid] = sha512_first_word(base + (unsigned long long)gid, commit, node_suffix);
 }
 
-} // extern "C"
+}

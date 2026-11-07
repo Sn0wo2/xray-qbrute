@@ -72,24 +72,6 @@ impl std::fmt::Display for BackendKind {
     }
 }
 
-#[allow(clippy::single_call_fn)]
-fn auto_backends() -> Vec<BackendKind> {
-    [
-        #[cfg(all(any(target_os = "windows", target_os = "linux"), feature = "cuda"))]
-        BackendKind::Cuda,
-        #[cfg(all(target_os = "macos", feature = "wgpu"))]
-        BackendKind::WgpuMetal,
-        #[cfg(all(not(target_os = "macos"), feature = "wgpu"))]
-        BackendKind::WgpuVulkan,
-        #[cfg(feature = "avx2")]
-        BackendKind::Avx2,
-        #[cfg(feature = "scalar")]
-        BackendKind::Scalar,
-    ]
-    .into_iter()
-    .collect()
-}
-
 pub fn search(
     config: &SearchConfig,
     backend: BackendKind,
@@ -105,7 +87,39 @@ pub fn prepare(
     validate_config(config)?;
 
     if requested == BackendKind::Auto {
-        return prepare_auto(config);
+        let mut fallback_reasons = Vec::new();
+        let mut backends = Vec::new();
+        for backend in [
+            #[cfg(all(any(target_os = "windows", target_os = "linux"), feature = "cuda"))]
+            BackendKind::Cuda,
+            #[cfg(all(target_os = "macos", feature = "wgpu"))]
+            BackendKind::WgpuMetal,
+            #[cfg(all(not(target_os = "macos"), feature = "wgpu"))]
+            BackendKind::WgpuVulkan,
+            #[cfg(feature = "avx2")]
+            BackendKind::Avx2,
+            #[cfg(feature = "scalar")]
+            BackendKind::Scalar,
+        ] {
+            match prepare_backend(config, backend) {
+                Ok(prepared) => backends.push(prepared),
+                Err(SearchError::Unavailable(reason)) => {
+                    fallback_reasons.push(format!("{backend}: {reason}"));
+                }
+                Err(error) => return Err(error),
+            }
+        }
+
+        if backends.is_empty() {
+            return Err(SearchError::Runtime(
+                "auto backend selection exhausted without a usable backend".to_owned(),
+            ));
+        }
+
+        return Ok(PreparedSearch {
+            backends,
+            fallback_reasons,
+        });
     }
 
     Ok(PreparedSearch {
@@ -141,7 +155,19 @@ impl PreparedSearch {
                     return Ok(outcome);
                 }
                 Err(SearchError::Unavailable(reason)) if position + 1 < self.backends.len() => {
-                    fallback_reasons.push(format!("{}: {reason}", backend.kind()));
+                    fallback_reasons.push(format!(
+                        "{}: {reason}",
+                        match backend {
+                            #[cfg(feature = "scalar")]
+                            PreparedBackend::Scalar => BackendKind::Scalar,
+                            #[cfg(feature = "avx2")]
+                            PreparedBackend::Avx2 => BackendKind::Avx2,
+                            #[cfg(feature = "wgpu")]
+                            PreparedBackend::Wgpu { kind, .. } => *kind,
+                            #[cfg(feature = "cuda")]
+                            PreparedBackend::Cuda { .. } => BackendKind::Cuda,
+                        }
+                    ));
                 }
                 Err(error) => return Err(error),
             }
@@ -151,47 +177,6 @@ impl PreparedSearch {
             "prepared search contains no backends".to_owned(),
         ))
     }
-}
-
-impl PreparedBackend {
-    const fn kind(&self) -> BackendKind {
-        match self {
-            #[cfg(feature = "scalar")]
-            Self::Scalar => BackendKind::Scalar,
-            #[cfg(feature = "avx2")]
-            Self::Avx2 => BackendKind::Avx2,
-            #[cfg(feature = "wgpu")]
-            Self::Wgpu { kind, .. } => *kind,
-            #[cfg(feature = "cuda")]
-            Self::Cuda { .. } => BackendKind::Cuda,
-        }
-    }
-}
-
-#[allow(clippy::single_call_fn)]
-fn prepare_auto(config: &SearchConfig) -> Result<PreparedSearch, SearchError> {
-    let mut fallback_reasons = Vec::new();
-    let mut backends = Vec::new();
-    for backend in auto_backends() {
-        match prepare_backend(config, backend) {
-            Ok(prepared) => backends.push(prepared),
-            Err(SearchError::Unavailable(reason)) => {
-                fallback_reasons.push(format!("{backend}: {reason}"));
-            }
-            Err(error) => return Err(error),
-        }
-    }
-
-    if backends.is_empty() {
-        return Err(SearchError::Runtime(
-            "auto backend selection exhausted without a usable backend".to_owned(),
-        ));
-    }
-
-    Ok(PreparedSearch {
-        backends,
-        fallback_reasons,
-    })
 }
 
 fn prepare_backend(

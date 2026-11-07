@@ -22,10 +22,6 @@ const CONFIG: SearchConfig = SearchConfig {
     leading_zero_bits: 64,
 };
 
-fn no_progress() -> ProgressReporter {
-    Arc::new(|_| {})
-}
-
 #[allow(clippy::single_call_fn)]
 fn bench_cpu_backends(c: &mut Criterion) {
     #[cfg(feature = "scalar")]
@@ -47,7 +43,7 @@ fn bench_one_cpu(c: &mut Criterion, name: &str, backend: BackendKind) {
         return;
     }
 
-    let progress = no_progress();
+    let progress: ProgressReporter = Arc::new(|_| {});
     let prepared =
         search::prepare(&CONFIG, backend).expect("selected CPU backend must be available");
     prepared
@@ -77,7 +73,7 @@ fn bench_one_cpu(c: &mut Criterion, name: &str, backend: BackendKind) {
 }
 
 #[allow(clippy::single_call_fn)]
-fn bench_wgpu(c: &mut Criterion) {
+fn bench_wgpu(_c: &mut Criterion) {
     #[cfg(feature = "wgpu")]
     {
         #[cfg(target_os = "macos")]
@@ -92,13 +88,13 @@ fn bench_wgpu(c: &mut Criterion) {
                 return;
             }
         };
-        let progress = no_progress();
+        let progress: ProgressReporter = Arc::new(|_| {});
         if let Err(error) = prepared.search(&CONFIG, &progress) {
             eprintln!("Skipping WGPU benchmark: {error}");
             return;
         }
 
-        let mut group = c.benchmark_group("gpu-backends");
+        let mut group = _c.benchmark_group("gpu-backends");
         group.sample_size(10);
         group.measurement_time(Duration::from_secs(5));
         group.warm_up_time(Duration::from_secs(1));
@@ -129,7 +125,7 @@ fn bench_wgpu(c: &mut Criterion) {
 }
 
 #[allow(clippy::single_call_fn)]
-fn bench_cuda(c: &mut Criterion) {
+fn bench_cuda(_c: &mut Criterion) {
     #[cfg(feature = "cuda")]
     {
         let prepared = match search::prepare(&CONFIG, BackendKind::Cuda) {
@@ -139,13 +135,13 @@ fn bench_cuda(c: &mut Criterion) {
                 return;
             }
         };
-        let progress = no_progress();
+        let progress: ProgressReporter = Arc::new(|_| {});
         if let Err(error) = prepared.search(&CONFIG, &progress) {
             eprintln!("Skipping CUDA benchmark: {error}");
             return;
         }
 
-        let mut group = c.benchmark_group("gpu-backends");
+        let mut group = _c.benchmark_group("gpu-backends");
         group.sample_size(10);
         group.measurement_time(Duration::from_secs(5));
         group.warm_up_time(Duration::from_secs(1));

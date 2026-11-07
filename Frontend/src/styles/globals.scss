@@ -1,0 +1,23 @@
+body {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+.glyph {
+  font-family: "MapleCN-NerdFont", var(--ti-font-mono);
+}
+
+.ti-input__label {
+  color: var(--ti-color-text);
+  font-size: var(--ti-font-size-label);
+  font-weight: 500;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

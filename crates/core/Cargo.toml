@@ -9,13 +9,14 @@ publish.workspace = true
 default = ["scalar", "avx2", "wgpu", "cuda"]
 scalar = ["dep:rayon"]
 avx2 = ["scalar"]
-wgpu = ["dep:wgpu", "dep:pollster"]
+wgpu = ["dep:wgpu", "dep:pollster", "dep:bytemuck"]
 cuda = ["dep:cudarc"]
 wasm-simd = []
 
 [dependencies]
 sha2.workspace = true
-bytemuck.workspace = true
+thiserror.workspace = true
+bytemuck = { workspace = true, optional = true }
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
 rayon = { workspace = true, optional = true }

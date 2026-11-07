@@ -36,7 +36,7 @@ pub(super) struct GpuSession {
     result: wgpu::Buffer,
     readback: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
-    adapter_name: String,
+    pub(super) adapter_name: String,
 }
 
 impl GpuSession {
@@ -150,10 +150,6 @@ impl GpuSession {
             );
         }
         Ok(session)
-    }
-
-    pub(super) fn adapter_name(&self) -> &str {
-        &self.adapter_name
     }
 
     pub(super) async fn dispatch(&self, base: u64, count: u32) -> Result<u32, String> {

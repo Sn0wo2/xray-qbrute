@@ -10,11 +10,9 @@ use web_sys::{DedicatedWorkerGlobalScope, MessageEvent};
 #[cfg(feature = "wasm-webgpu")]
 use super::gpu::GpuSession;
 use super::protocol::{BackendRequest, CoordinatorCommand, CpuKernel, SearchEvent, SearchRequest};
-use super::search_runner::now;
-
 pub(super) struct Controller {
-    scope: DedicatedWorkerGlobalScope,
-    cancelled: Rc<Cell<bool>>,
+    pub(super) scope: DedicatedWorkerGlobalScope,
+    pub(super) cancelled: Rc<Cell<bool>>,
     debug_enabled: Rc<Cell<bool>>,
     #[cfg(feature = "wasm-webgpu")]
     gpu_session: Rc<RefCell<Option<GpuCacheEntry>>>,
@@ -130,7 +128,7 @@ impl Controller {
             BackendRequest::Webgpu => {
                 let session = self.prepare_gpu(request).await?;
                 self.post(&SearchEvent::Device {
-                    name: session.adapter_name().to_owned(),
+                    name: session.adapter_name.to_owned(),
                 });
             }
             BackendRequest::WasmSimd | BackendRequest::Scalar => {
@@ -146,13 +144,22 @@ impl Controller {
                 return Err("WebGPU is unavailable in this build".to_owned());
             }
         }
+        let backend_name = match backend {
+            BackendRequest::Auto => "auto",
+            BackendRequest::Webgpu => "webgpu",
+            BackendRequest::WasmSimd => "wasm-simd",
+            BackendRequest::Scalar => "scalar",
+        };
         self.post(&SearchEvent::Prepared {
-            backend: backend_name(backend),
+            backend: backend_name,
             fallbacks: fallbacks.clone(),
         });
-        self.debug(&format!("prepared backend={}", backend_name(backend)));
+        self.debug(&format!("prepared backend={backend_name}"));
 
-        let started = now(&self.scope);
+        let started = self
+            .scope
+            .performance()
+            .map_or_else(js_sys::Date::now, |value| value.now());
         match backend {
             #[cfg(feature = "wasm-webgpu")]
             BackendRequest::Webgpu if matches!(request.backend, BackendRequest::Auto) => {
@@ -168,8 +175,15 @@ impl Controller {
                             backend: "wasm-simd",
                             fallbacks: fallbacks.clone(),
                         });
-                        self.run_cpu(request, CpuKernel::Simd, now(&self.scope), fallbacks)
-                            .await
+                        self.run_cpu(
+                            request,
+                            CpuKernel::Simd,
+                            self.scope
+                                .performance()
+                                .map_or_else(js_sys::Date::now, |value| value.now()),
+                            fallbacks,
+                        )
+                        .await
                     }
                 }
             }
@@ -222,26 +236,9 @@ impl Controller {
         }
     }
 
-    pub(super) fn cancelled(&self) -> bool {
-        self.cancelled.get()
-    }
-
-    pub(super) const fn scope(&self) -> &DedicatedWorkerGlobalScope {
-        &self.scope
-    }
-
     pub(super) fn debug(&self, message: &str) {
         if self.debug_enabled.get() {
             web_sys::console::debug_1(&format!("[wasm] {message}").into());
         }
-    }
-}
-
-const fn backend_name(backend: BackendRequest) -> &'static str {
-    match backend {
-        BackendRequest::Auto => "auto",
-        BackendRequest::Webgpu => "webgpu",
-        BackendRequest::WasmSimd => "wasm-simd",
-        BackendRequest::Scalar => "scalar",
     }
 }

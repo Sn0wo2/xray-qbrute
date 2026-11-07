@@ -53,24 +53,13 @@ pub fn expected_search_seconds(leading_zero_bits: u32, rate_per_second: f64) -> 
     2_f64.powi(leading_zero_bits as i32) / rate_per_second.max(f64::EPSILON)
 }
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 #[allow(clippy::exhaustive_enums)]
 pub enum SearchError {
+    #[error("backend unavailable: {0}")]
     Unavailable(String),
+    #[error("invalid search configuration: {0}")]
     InvalidConfig(String),
+    #[error("backend runtime error: {0}")]
     Runtime(String),
 }
-
-impl std::fmt::Display for SearchError {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Unavailable(message) => write!(formatter, "backend unavailable: {message}"),
-            Self::InvalidConfig(message) => {
-                write!(formatter, "invalid search configuration: {message}")
-            }
-            Self::Runtime(message) => write!(formatter, "backend runtime error: {message}"),
-        }
-    }
-}
-
-impl std::error::Error for SearchError {}

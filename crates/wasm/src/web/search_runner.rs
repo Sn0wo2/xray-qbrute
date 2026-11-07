@@ -1,13 +1,12 @@
 use rayon::prelude::*;
 use wasm_bindgen::{JsCast, JsValue, closure::Closure};
 use wasm_bindgen_futures::JsFuture;
-use web_sys::DedicatedWorkerGlobalScope;
 
 use super::controller::Controller;
 #[cfg(feature = "wasm-webgpu")]
 use super::gpu::GPU_BATCH_SIZE;
 use super::protocol::{CpuKernel, SearchEvent, SearchRequest};
-use super::result_details;
+use crate::candidate::{self, CandidateConfig, MAX_UUID_INDEX};
 
 const CPU_BATCH_SIZE: u64 = 1 << 18;
 const CPU_TASK_SIZE: u32 = 1 << 12;
@@ -24,7 +23,7 @@ impl Controller {
         self.debug(&format!("CPU search begin kernel={kernel:?}"));
         let mut base = 0_u64;
         while base < request.max_index {
-            if self.cancelled() {
+            if self.cancelled.get() {
                 self.debug(&format!("CPU search stopped processed={base}"));
                 self.finish(request, "stopped", None, base, base, started, fallbacks);
                 return Ok(());
@@ -38,21 +37,63 @@ impl Controller {
                     let task_count = CPU_TASK_SIZE.min(count - offset);
                     let start = base + u64::from(offset);
                     let hit = match kernel {
-                        CpuKernel::Scalar => super::search_scalar_batch(
-                            request.commit,
-                            request.node_suffix,
-                            start,
-                            task_count,
-                            request.difficulty,
-                        ),
+                        CpuKernel::Scalar => {
+                            let end = start
+                                .saturating_add(u64::from(task_count))
+                                .min(MAX_UUID_INDEX);
+                            let config = CandidateConfig {
+                                commit: request.commit,
+                                node_suffix: request.node_suffix,
+                            };
+                            (start..end)
+                                .find(|&index| {
+                                    candidate::matches_leading_zero_bits(
+                                        candidate::digest_word(&candidate::digest(index, config)),
+                                        request.difficulty,
+                                    )
+                                })
+                                .unwrap_or(u64::MAX)
+                        }
                         #[cfg(all(feature = "wasm-simd", target_family = "wasm"))]
-                        CpuKernel::Simd => super::search_simd_batch(
-                            request.commit,
-                            request.node_suffix,
-                            start,
-                            task_count,
-                            request.difficulty,
-                        ),
+                        CpuKernel::Simd => {
+                            let end = start
+                                .saturating_add(u64::from(task_count))
+                                .min(MAX_UUID_INDEX);
+                            let config = CandidateConfig {
+                                commit: request.commit,
+                                node_suffix: request.node_suffix,
+                            };
+                            let vector_end = end - (end - start) % 2;
+                            let mut index = start;
+                            let mut hit = None;
+                            while index < vector_end {
+                                let words = super::simd_words([index, index + 1], config);
+                                if candidate::matches_leading_zero_bits(
+                                    words[0],
+                                    request.difficulty,
+                                ) {
+                                    hit = Some(index);
+                                    break;
+                                }
+                                if candidate::matches_leading_zero_bits(
+                                    words[1],
+                                    request.difficulty,
+                                ) {
+                                    hit = Some(index + 1);
+                                    break;
+                                }
+                                index += 2;
+                            }
+                            hit.or_else(|| {
+                                (vector_end..end).find(|&tail| {
+                                    candidate::matches_leading_zero_bits(
+                                        candidate::digest_word(&candidate::digest(tail, config)),
+                                        request.difficulty,
+                                    )
+                                })
+                            })
+                            .unwrap_or(u64::MAX)
+                        }
                         #[cfg(not(all(feature = "wasm-simd", target_family = "wasm")))]
                         CpuKernel::Simd => return None,
                     };
@@ -77,7 +118,23 @@ impl Controller {
             base = evaluated;
             self.debug(&format!("CPU batch complete processed={base}"));
             self.progress(base, base, request.max_index, started);
-            yield_to_event_loop(self.scope()).await?;
+            JsFuture::from(js_sys::Promise::new(&mut |resolve, reject| {
+                let callback = Closure::once(move || {
+                    drop(resolve.call0(&JsValue::UNDEFINED));
+                });
+                match self
+                    .scope
+                    .set_timeout_with_callback_and_timeout_and_arguments_0(
+                        callback.as_ref().unchecked_ref(),
+                        0,
+                    ) {
+                    Ok(_) => callback.forget(),
+                    Err(error) => drop(reject.call1(&JsValue::UNDEFINED, &error)),
+                }
+            }))
+            .await
+            .map(|_| ())
+            .map_err(|error| format!("event-loop yield failed: {error:?}"))?;
         }
         self.finish(
             request,
@@ -104,7 +161,7 @@ impl Controller {
         let mut base = 0_u64;
         let mut evaluated = 0_u64;
         while base < request.max_index {
-            if self.cancelled() {
+            if self.cancelled.get() {
                 self.debug(&format!(
                     "WebGPU search stopped processed={base} evaluated={evaluated}"
                 ));
@@ -153,7 +210,11 @@ impl Controller {
             processed: processed.to_string(),
             evaluated: evaluated.to_string(),
             max_index: max_index.to_string(),
-            elapsed_ms: now(self.scope()) - started,
+            elapsed_ms: self
+                .scope
+                .performance()
+                .map_or_else(js_sys::Date::now, |value| value.now())
+                - started,
         });
     }
 
@@ -172,41 +233,30 @@ impl Controller {
             "finish kind={kind} index={index:?} processed={processed} evaluated={evaluated}"
         ));
         let (uuid, hash) = index
-            .map(|index| result_details(request.commit, request.node_suffix, index))
+            .map(|index| {
+                let config = CandidateConfig {
+                    commit: request.commit,
+                    node_suffix: request.node_suffix,
+                };
+                (
+                    uuid::Uuid::from_bytes(candidate::candidate_bytes(index, config)).to_string(),
+                    hex::encode(&candidate::digest(index, config)[..10]),
+                )
+            })
             .map_or((None, None), |(uuid, hash)| (Some(uuid), Some(hash)));
         self.post(&SearchEvent::Done {
             kind,
             index: index.map(|value| value.to_string()),
             processed: processed.to_string(),
             evaluated: evaluated.to_string(),
-            elapsed_ms: now(self.scope()) - started,
+            elapsed_ms: self
+                .scope
+                .performance()
+                .map_or_else(js_sys::Date::now, |value| value.now())
+                - started,
             uuid,
             hash,
             fallbacks,
         });
     }
-}
-
-#[allow(clippy::single_call_fn)]
-async fn yield_to_event_loop(scope: &DedicatedWorkerGlobalScope) -> Result<(), String> {
-    let promise = js_sys::Promise::new(&mut |resolve, _reject| {
-        let callback = Closure::once(move || {
-            drop(resolve.call0(&JsValue::UNDEFINED));
-        });
-        drop(scope.set_timeout_with_callback_and_timeout_and_arguments_0(
-            callback.as_ref().unchecked_ref(),
-            0,
-        ));
-        callback.forget();
-    });
-    JsFuture::from(promise)
-        .await
-        .map(|_| ())
-        .map_err(|error| format!("event-loop yield failed: {error:?}"))
-}
-
-pub(super) fn now(scope: &DedicatedWorkerGlobalScope) -> f64 {
-    scope
-        .performance()
-        .map_or_else(js_sys::Date::now, |value| value.now())
 }

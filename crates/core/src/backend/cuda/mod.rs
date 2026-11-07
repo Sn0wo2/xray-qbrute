@@ -4,51 +4,18 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
-use cudarc::driver::{CudaContext, DeviceRepr, LaunchConfig, PushKernelArg};
+use cudarc::driver::{CudaContext, LaunchConfig, PushKernelArg};
 use cudarc::nvrtc::compile_ptx;
 
-use crate::candidate::{self, CandidateConfig};
+use crate::candidate;
 
 use super::{BackendOutcome, ProgressReporter, SearchConfig, SearchError, SearchHit};
 
 const CANDIDATES_PER_INVOCATION: u32 = 32;
 const BLOCK_SIZE: u32 = 256;
 const MAX_BATCH: u64 = 1 << 28;
-const SELF_TEST_COUNT: u64 = 256;
-const SELF_TEST_BASES: [u64; 4] = [0, 1 << 28, 1 << 30, (1 << 58) - 256];
 
 const KERNEL_SOURCE: &str = include_str!(concat!(env!("OUT_DIR"), "/sha512_search.cu"));
-
-#[repr(C)]
-#[derive(Clone, Copy, Default)]
-struct GpuResult {
-    min_offset: u32,
-    _pad: [u32; 3],
-}
-
-unsafe impl DeviceRepr for GpuResult {}
-
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct GpuParams {
-    base_lo: u32,
-    base_hi: u32,
-    candidate_count: u32,
-    reserved: u32,
-}
-
-unsafe impl DeviceRepr for GpuParams {}
-
-impl GpuParams {
-    const fn new(base: u64, candidate_count: u64) -> Self {
-        Self {
-            base_lo: base as u32,
-            base_hi: (base >> 32) as u32,
-            candidate_count: candidate_count as u32,
-            reserved: 0,
-        }
-    }
-}
 
 #[allow(clippy::module_name_repetitions)]
 pub struct CudaSearchSession {
@@ -252,7 +219,19 @@ impl CudaSearchSession {
             leading_zero_bits: config.leading_zero_bits,
         };
 
-        session.verify_sha512(config.candidate)?;
+        for base in [0, 1 << 28, 1 << 30, (1 << 58) - 256] {
+            let words = session.hash_first_words(base, 256)?;
+            for (offset, &actual) in words.iter().enumerate() {
+                let index = base + offset as u64;
+                let expected = candidate::digest_word(&candidate::digest(index, config.candidate));
+                if actual != expected {
+                    return Err(SearchError::Runtime(format!(
+                        "CUDA SHA-512 self-test failed at index {index}: \
+                         kernel produced 0x{actual:016x}, expected 0x{expected:016x}"
+                    )));
+                }
+            }
+        }
 
         Ok(session)
     }
@@ -275,14 +254,13 @@ impl CudaSearchSession {
             let batch_count = (config.max_index - base).min(MAX_BATCH);
             let result = self.run_search_batch(base, batch_count, config.leading_zero_bits)?;
 
-            if result.min_offset != u32::MAX {
-                if u64::from(result.min_offset) >= batch_count {
+            if result != u32::MAX {
+                if u64::from(result) >= batch_count {
                     return Err(SearchError::Runtime(format!(
-                        "CUDA kernel returned offset {} outside a {batch_count}-candidate batch",
-                        result.min_offset
+                        "CUDA kernel returned offset {result} outside a {batch_count}-candidate batch"
                     )));
                 }
-                let index = base + u64::from(result.min_offset);
+                let index = base + u64::from(result);
                 let processed = index + 1;
                 progress(processed - base);
                 return Ok(BackendOutcome {
@@ -325,22 +303,17 @@ impl CudaSearchSession {
         base: u64,
         candidate_count: u64,
         leading_zero_bits: u32,
-    ) -> Result<GpuResult, SearchError> {
+    ) -> Result<u32, SearchError> {
         let stream = self.context.default_stream();
 
-        let params = GpuParams::new(base, candidate_count);
+        let params = [base as u32, (base >> 32) as u32, candidate_count as u32, 0];
         let params_buf = stream.clone_htod(&[params]).map_err(|error| {
             SearchError::Runtime(format!("CUDA params upload failed: {error:?}"))
         })?;
 
-        let result_buf = stream
-            .clone_htod(&[GpuResult {
-                min_offset: u32::MAX,
-                _pad: [0; 3],
-            }])
-            .map_err(|error| {
-                SearchError::Runtime(format!("CUDA result buffer init failed: {error:?}"))
-            })?;
+        let result_buf = stream.clone_htod(&[[u32::MAX, 0, 0, 0]]).map_err(|error| {
+            SearchError::Runtime(format!("CUDA result buffer init failed: {error:?}"))
+        })?;
 
         let threads_needed = (candidate_count as u32).div_ceil(CANDIDATES_PER_INVOCATION);
         let blocks = threads_needed.div_ceil(BLOCK_SIZE);
@@ -365,37 +338,23 @@ impl CudaSearchSession {
                 })?;
         }
 
-        let results: Vec<GpuResult> = stream.clone_dtoh(&result_buf).map_err(|error| {
+        let results: Vec<[u32; 4]> = stream.clone_dtoh(&result_buf).map_err(|error| {
             SearchError::Runtime(format!("CUDA result readback failed: {error:?}"))
         })?;
 
-        results.into_iter().next().ok_or_else(|| {
-            SearchError::Runtime("CUDA result readback returned no values".to_owned())
-        })
-    }
-
-    fn verify_sha512(&self, candidate: CandidateConfig) -> Result<(), SearchError> {
-        for base in SELF_TEST_BASES {
-            let words = self.hash_first_words(base, SELF_TEST_COUNT)?;
-            for (offset, &actual) in words.iter().enumerate() {
-                let index = base + offset as u64;
-                let hash = candidate::digest(index, candidate);
-                let expected = candidate::digest_word(&hash);
-                if actual != expected {
-                    return Err(SearchError::Runtime(format!(
-                        "CUDA SHA-512 self-test failed at index {index}: \
-                         kernel produced 0x{actual:016x}, expected 0x{expected:016x}"
-                    )));
-                }
-            }
-        }
-        Ok(())
+        results
+            .into_iter()
+            .next()
+            .map(|[min_offset, _, _, _]| min_offset)
+            .ok_or_else(|| {
+                SearchError::Runtime("CUDA result readback returned no values".to_owned())
+            })
     }
 
     fn hash_first_words(&self, base: u64, count: u64) -> Result<Vec<u64>, SearchError> {
         let stream = self.context.default_stream();
 
-        let params = GpuParams::new(base, count);
+        let params = [base as u32, (base >> 32) as u32, count as u32, 0];
         let params_buf = stream.clone_htod(&[params]).map_err(|error| {
             SearchError::Runtime(format!("CUDA params upload failed: {error:?}"))
         })?;

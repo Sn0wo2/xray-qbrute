@@ -4,13 +4,12 @@ import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { artifactFlavor, wasmThreadsAvailable } from '../web/public/wasm-runtime.js'
+import { artifactFlavor, wasmThreadsAvailable } from '../Frontend/public/wasm-runtime.js'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-const webDir = path.join(root, 'web')
-const pkgDir = path.join(webDir, 'public', 'pkg')
+const frontendDir = path.join(root, 'Frontend')
+const pkgDir = path.join(frontendDir, 'public', 'pkg')
 const wasmTarget = 'wasm32-unknown-unknown'
-const wasmLib = 'xray-qbrute-wasm'
 const wasmOut = path.join(root, 'target', wasmTarget, 'release', 'xray_qbrute.wasm')
 
 const flavors = [
@@ -91,8 +90,7 @@ export async function startWorkers(module, memory, builder) {
 `
 
 function run(command, args, opts = {}) {
-  const line = [command, ...args].join(' ')
-  console.log(`\n$ ${line}`)
+  console.log(`\n$ ${[command, ...args].join(' ')}`)
   const result = spawnSync(command, args, {
     cwd: opts.cwd ?? root,
     stdio: 'inherit',
@@ -107,43 +105,6 @@ function buildCli() {
   run('cargo', ['build', '--release'])
 }
 
-function patchRayonPackage(directory) {
-  const gluePath = path.join(directory, 'xray_qbrute.js')
-  const workerGluePath = path.join(directory, 'xray_qbrute.worker.js')
-  const glue = fs.readFileSync(gluePath, 'utf8')
-  const workerGlue = glue.replace(
-    /^import \{ startWorkers \} from '.+workerHelpers\.no-bundler\.js';$/m,
-    "const startWorkers = () => { throw new Error('nested Rayon pool initialization is unavailable'); };",
-  )
-  if (workerGlue === glue) throw new Error(`Rayon helper import not found in ${gluePath}`)
-  fs.writeFileSync(workerGluePath, workerGlue)
-
-  const sharedHelperPath = path.join(pkgDir, 'shared', 'workerHelpers.no-bundler.js')
-  if (!fs.existsSync(sharedHelperPath)) {
-    fs.mkdirSync(path.dirname(sharedHelperPath), { recursive: true })
-    fs.writeFileSync(sharedHelperPath, RAYON_HELPER)
-  }
-
-  const snippetDirectories = fs.readdirSync(path.join(directory, 'snippets'), {
-    withFileTypes: true,
-  })
-  const rayonDirectory = snippetDirectories.find(
-    (entry) => entry.isDirectory() && entry.name.startsWith('wasm-bindgen-rayon-'),
-  )
-  if (!rayonDirectory) throw new Error(`Rayon snippet directory not found in ${directory}`)
-
-  const glueImportPath = `./snippets/${rayonDirectory.name}/src/workerHelpers.no-bundler.js`
-  const sharedImportPath = '../shared/workerHelpers.no-bundler.js'
-  const reGlue = glue.replace(
-    new RegExp(`from '${glueImportPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}'`),
-    `from '${sharedImportPath}'`,
-  )
-  if (reGlue === glue) throw new Error(`Glue import path not rewritten in ${gluePath}`)
-  fs.writeFileSync(gluePath, reGlue)
-
-  fs.rmSync(path.join(directory, 'snippets'), { recursive: true, force: true })
-}
-
 function buildWasm() {
   fs.rmSync(pkgDir, { recursive: true, force: true })
   for (const flavor of flavors) {
@@ -152,7 +113,7 @@ function buildWasm() {
       '--release',
       '-Zbuild-std=panic_abort,std',
       '-p',
-      wasmLib,
+      'xray-qbrute-wasm',
       '--lib',
       '--target',
       wasmTarget,
@@ -170,30 +131,60 @@ function buildWasm() {
       'xray_qbrute',
       wasmOut,
     ])
-    patchRayonPackage(path.join(pkgDir, flavor.name))
+
+    const directory = path.join(pkgDir, flavor.name)
+    const gluePath = path.join(directory, 'xray_qbrute.js')
+    const glue = fs.readFileSync(gluePath, 'utf8')
+    const workerGlue = glue.replace(
+      /^import \{ startWorkers \} from '.+workerHelpers\.no-bundler\.js';$/m,
+      "const startWorkers = () => { throw new Error('nested Rayon pool initialization is unavailable'); };",
+    )
+    if (workerGlue === glue) throw new Error(`Rayon helper import not found in ${gluePath}`)
+    fs.writeFileSync(path.join(directory, 'xray_qbrute.worker.js'), workerGlue)
+
+    const sharedHelperPath = path.join(pkgDir, 'shared', 'workerHelpers.no-bundler.js')
+    if (!fs.existsSync(sharedHelperPath)) {
+      fs.mkdirSync(path.dirname(sharedHelperPath), { recursive: true })
+      fs.writeFileSync(sharedHelperPath, RAYON_HELPER)
+    }
+
+    const rayonDirectory = fs
+      .readdirSync(path.join(directory, 'snippets'), { withFileTypes: true })
+      .find((entry) => entry.isDirectory() && entry.name.startsWith('wasm-bindgen-rayon-'))
+    if (!rayonDirectory) throw new Error(`Rayon snippet directory not found in ${directory}`)
+
+    const glueImportPath = `./snippets/${rayonDirectory.name}/src/workerHelpers.no-bundler.js`
+    const reGlue = glue.replace(
+      new RegExp(`from '${glueImportPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}'`),
+      `from '../shared/workerHelpers.no-bundler.js'`,
+    )
+    if (reGlue === glue) throw new Error(`Glue import path not rewritten in ${gluePath}`)
+    fs.writeFileSync(gluePath, reGlue)
+
+    fs.rmSync(path.join(directory, 'snippets'), { recursive: true, force: true })
   }
 }
 
 function verify() {
-  const webPackage = JSON.parse(fs.readFileSync(path.join(webDir, 'package.json'), 'utf8'))
+  const webPackage = JSON.parse(fs.readFileSync(path.join(frontendDir, 'package.json'), 'utf8'))
   if (!webPackage.dependencies?.['coi-serviceworker']) {
-    throw new Error('coi-serviceworker is not in web/package.json dependencies')
+    throw new Error('coi-serviceworker is not in Frontend/package.json dependencies')
   }
   for (const flavor of flavors) {
     const directory = path.join(pkgDir, flavor.name)
     const glue = fs.readFileSync(path.join(directory, 'xray_qbrute.js'), 'utf8')
     const workerGlue = fs.readFileSync(path.join(directory, 'xray_qbrute.worker.js'), 'utf8')
     const wasm = fs.readFileSync(path.join(directory, 'xray_qbrute_bg.wasm'))
-    if (!WebAssembly.validate(wasm)) throw new Error(`${flavor} WASM is invalid`)
-    if (!glue.includes('initThreadPool')) throw new Error(`${flavor} thread export missing`)
+    if (!WebAssembly.validate(wasm)) throw new Error(`${flavor.name} WASM is invalid`)
+    if (!glue.includes('initThreadPool')) throw new Error(`${flavor.name} thread export missing`)
     if (!glue.includes('../shared/workerHelpers.no-bundler.js')) {
-      throw new Error(`${flavor} glue does not reference the shared Rayon helper`)
+      throw new Error(`${flavor.name} glue does not reference the shared Rayon helper`)
     }
     if (
       workerGlue.includes('import { startWorkers }') ||
       !workerGlue.includes('nested Rayon pool initialization')
     ) {
-      throw new Error(`${flavor} worker glue still imports the Rayon pool helper`)
+      throw new Error(`${flavor.name} worker glue still imports the Rayon pool helper`)
     }
   }
   const helper = fs.readFileSync(path.join(pkgDir, 'shared', 'workerHelpers.no-bundler.js'), 'utf8')
@@ -221,30 +212,28 @@ function verify() {
 }
 
 async function buildWeb() {
-  fs.rmSync(path.join(webDir, 'dist'), { recursive: true, force: true })
-  run('node', [path.join(webDir, 'node_modules/vue-tsc/bin/vue-tsc.js'), '--noEmit'], {
-    cwd: webDir,
+  const dist = path.join(frontendDir, 'dist')
+  fs.rmSync(dist, { recursive: true, force: true })
+  run('node', [path.join(frontendDir, 'node_modules/vue-tsc/bin/vue-tsc.js'), '--noEmit'], {
+    cwd: frontendDir,
   })
-  run('node', [path.join(webDir, 'node_modules/vite/bin/vite.js'), 'build'], { cwd: webDir })
-  await minifyDist()
-}
+  run('node', [path.join(frontendDir, 'node_modules/vite/bin/vite.js'), 'build'], { cwd: frontendDir })
 
-async function minifyDist() {
   const { transform } = await import(
-    pathToFileURL(path.join(webDir, 'node_modules/esbuild/lib/main.js')).href,
+    pathToFileURL(path.join(frontendDir, 'node_modules/esbuild/lib/main.js')).href,
   )
   const files = [
     ...flavors.flatMap((flavor) => [
-      path.join(webDir, 'dist', 'pkg', flavor.name, 'xray_qbrute.js'),
-      path.join(webDir, 'dist', 'pkg', flavor.name, 'xray_qbrute.worker.js'),
+      path.join(dist, 'pkg', flavor.name, 'xray_qbrute.js'),
+      path.join(dist, 'pkg', flavor.name, 'xray_qbrute.worker.js'),
     ]),
-    path.join(webDir, 'dist', 'coi-serviceworker.js'),
-    path.join(webDir, 'dist', 'search-worker.js'),
-    path.join(webDir, 'dist', 'wasm-runtime.js'),
+    path.join(dist, 'coi-serviceworker.js'),
+    path.join(dist, 'search-worker.js'),
+    path.join(dist, 'wasm-runtime.js'),
   ]
   for (const file of files) {
     if (!fs.existsSync(file)) {
-      console.warn(`skip missing ${path.relative(root, file)}`)
+      console.warn(`skip missing ${path.relative(frontendDir, file)}`)
       continue
     }
     const format = file.endsWith('coi-serviceworker.js') ? 'iife' : 'esm'
@@ -252,7 +241,9 @@ async function minifyDist() {
     const { code } = await transform(fs.readFileSync(file, 'utf8'), { minify: true, format })
     fs.writeFileSync(file, code)
     const after = Buffer.byteLength(code)
-    console.log(`minified ${path.relative(webDir, file)}: ${before} -> ${after} bytes (-${Math.round((1 - after / before) * 100)}%)`)
+    console.log(
+      `minified ${path.relative(frontendDir, file)}: ${before} -> ${after} bytes (-${Math.round((1 - after / before) * 100)}%)`,
+    )
   }
 }
 
@@ -264,11 +255,11 @@ async function buildWebAll() {
 
 const tasks = {
   cli: 'build the CLI binary (crates/cli)',
-  wasm: 'build the WebAssembly packages (web/public/pkg/{scalar,accelerated})',
-  web: 'build the web frontend (vue-tsc + vite)',
-  'web-all': 'build the full web deliverable (wasm packages, validate, frontend)',
+  wasm: 'build the WebAssembly packages (Frontend/public/pkg/{scalar,accelerated})',
+  frontend: 'build the web frontend (vue-tsc + vite)',
+  'frontend-all': 'build the full web deliverable (wasm packages, validate, frontend)',
   verify: 'validate the built wasm packages',
-  all: 'build everything (cli + web-all)',
+  all: 'build everything (cli + frontend-all)',
 }
 
 function printHelp() {
@@ -298,10 +289,10 @@ async function main() {
     case 'verify':
       verify()
       break
-    case 'web':
+    case 'frontend':
       await buildWeb()
       break
-    case 'web-all':
+    case 'frontend-all':
       await buildWebAll()
       break
     case 'all':
@@ -320,4 +311,3 @@ main().catch((error) => {
   console.error(error)
   process.exit(1)
 })
-

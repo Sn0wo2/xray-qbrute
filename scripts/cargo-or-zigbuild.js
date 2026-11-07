@@ -40,24 +40,21 @@ const bin = args[binIndex] === "--bin" ? args[binIndex + 1] : args[binIndex]?.sl
 const targetPrefix = target?.split(".", 1)[0]
 const abi = targetPrefix?.slice(targetPrefix.lastIndexOf("-") + 1)
 const outputTarget = target && abi?.startsWith("gnu") && abi !== "gnullvm" ? targetPrefix : target
-if (process.env.BUILD_PROFILE === "debug" && (!bin || !outputTarget)) {
+const executable = `${bin}${target?.includes("windows") ? ".exe" : ""}`
+const debug = process.env.BUILD_PROFILE === "debug"
+if (debug && (!bin || !outputTarget)) {
   console.error("ERROR: debug builds require a binary name and target")
   process.exit(1)
 }
-if (process.env.BUILD_PROFILE === "debug") {
+if (debug) {
   const release = args.indexOf("--release")
   if (release !== -1) args.splice(release, 1)
   args.push("--profile=dev")
-}
-if (process.env.BUILD_PROFILE === "debug") {
-  rmSync(resolve("target", outputTarget, "release", `${bin}${target?.includes("windows") ? ".exe" : ""}`), { force: true })
+  rmSync(resolve("target", outputTarget, "release", executable), { force: true })
 }
 const result = spawnSync("cargo", args, { stdio: "inherit", env })
-if (process.env.BUILD_PROFILE === "debug" && result.status === 0) {
+if (debug && result.status === 0) {
   mkdirSync(resolve("target", outputTarget, "release"), { recursive: true })
-  copyFileSync(
-    resolve("target", outputTarget, "debug", `${bin}${target?.includes("windows") ? ".exe" : ""}`),
-    resolve("target", outputTarget, "release", `${bin}${target?.includes("windows") ? ".exe" : ""}`),
-  )
+  copyFileSync(resolve("target", outputTarget, "debug", executable), resolve("target", outputTarget, "release", executable))
 }
 process.exit(result.status ?? 1)

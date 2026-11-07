@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="Deterministic UUID brute-force search using WebGPU or WebAssembly SIMD."
+    />
+    <meta name="theme-color" content="#faf9f5" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#141413" media="(prefers-color-scheme: dark)" />
+    <script>
+      window.coi = { quiet: !new URLSearchParams(location.search).has('debug') }
+    </script>
+    <style>
+      html {
+        background: #faf9f5;
+      }
+      @media (prefers-color-scheme: dark) {
+        html {
+          background: #141413;
+        }
+      }
+    </style>
+
+    <title>xray-qbrute</title>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

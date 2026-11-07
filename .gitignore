@@ -11,18 +11,7 @@ rustc-ice-*.txt
 .vscode/
 
 # Web dependencies, caches, and generated bundles
-web/node_modules/
-web/.vite/
-web/dist/
-web/pkg/
-web/public/pkg/
 *.tsbuildinfo
-web/.eslintcache
-web/.stylelintcache
-
-# Generated declaration files
-web/src/auto-imports.d.ts
-web/src/components.d.ts
 
 # Local development tools agent state
 .codegraph/

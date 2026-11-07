@@ -6,7 +6,7 @@ on:
     paths:
       - 'crates/**'
       - 'scripts/**'
-      - 'web/**'
+      - 'Frontend/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
       - '.github/workflows/deploy.yml'
@@ -46,31 +46,29 @@ jobs:
 
       - name: Build wasm packages
         run: node scripts/build.ts wasm
-      - name: Set up pnpm
-        uses: pnpm/action-setup@v6
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
         with:
-          package_json_file: web/package.json
+          bun-version-file: Frontend/package.json
 
       - name: Set up Node.js
         uses: actions/setup-node@v7
         with:
           node-version: 24
-          cache: pnpm
-          cache-dependency-path: web/pnpm-lock.yaml
 
       - name: Install dependencies
-        working-directory: web
-        run: pnpm install --frozen-lockfile
+        working-directory: Frontend
+        run: bun install --frozen-lockfile
 
       - name: Build
-        run: node scripts/build.ts web
+        run: node scripts/build.ts frontend
 
       - name: Deploy
         id: deploy
         uses: peaceiris/actions-gh-pages@v4
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: web/dist
+          publish_dir: Frontend/dist
           force_orphan: true
           user_name: github-actions[bot]
           user_email: github-actions[bot]@users.noreply.github.com

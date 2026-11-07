@@ -1,0 +1,10 @@
+node_modules/
+.vite/
+dist/
+pkg/
+public/pkg/
+*.tsbuildinfo
+.eslintcache
+.stylelintcache
+src/auto-imports.d.ts
+src/components.d.ts

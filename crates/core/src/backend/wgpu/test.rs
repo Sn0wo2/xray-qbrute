@@ -29,10 +29,14 @@ const TEST_BACKENDS: &[WgpuBackend] = &[WgpuBackend::Metal];
 const TEST_BACKENDS: &[WgpuBackend] = &[WgpuBackend::Vulkan];
 
 fn context_or_skip(backend: WgpuBackend, config: SearchConfig) -> Option<GpuContext> {
+    let backend_name = match backend {
+        WgpuBackend::Vulkan => "wgpu-vulkan",
+        WgpuBackend::Metal => "wgpu-metal",
+    };
     match pollster::block_on(create_context_async(backend, config)) {
         Ok(context) => Some(context),
         Err(SearchError::Unavailable(reason)) => {
-            eprintln!("Skipping {} GPU test: {reason}", backend.name());
+            eprintln!("Skipping {backend_name} GPU test: {reason}");
             None
         }
         Err(error) => panic!("GPU initialization failed unexpectedly: {error}"),
@@ -42,6 +46,10 @@ fn context_or_skip(backend: WgpuBackend, config: SearchConfig) -> Option<GpuCont
 #[test]
 fn gpu_hashes_match_scalar() {
     for &backend in TEST_BACKENDS {
+        let backend_name = match backend {
+            WgpuBackend::Vulkan => "wgpu-vulkan",
+            WgpuBackend::Metal => "wgpu-metal",
+        };
         for candidate_config in [CONFIG, ALTERNATE_CONFIG] {
             let search_config = SearchConfig {
                 candidate: candidate_config,
@@ -63,7 +71,7 @@ fn gpu_hashes_match_scalar() {
                     let index = base + offset as u64;
                     let expected =
                         candidate::digest_word(&candidate::digest(index, candidate_config));
-                    assert_eq!(actual_word, expected, "{} index {index}", backend.name());
+                    assert_eq!(actual_word, expected, "{backend_name} index {index}");
                 }
             }
         }
@@ -81,15 +89,19 @@ fn gpu_search_finds_valid_hit() {
     };
 
     for &backend in TEST_BACKENDS {
+        let backend_name = match backend {
+            WgpuBackend::Vulkan => "wgpu-vulkan",
+            WgpuBackend::Metal => "wgpu-metal",
+        };
         let outcome = match search(&config, backend, &progress) {
             Ok(outcome) => outcome,
             Err(SearchError::Unavailable(reason)) => {
-                eprintln!("Skipping {} GPU test: {reason}", backend.name());
+                eprintln!("Skipping {backend_name} GPU test: {reason}");
                 continue;
             }
-            Err(error) => panic!("{} GPU search failed unexpectedly: {error}", backend.name()),
+            Err(error) => panic!("{backend_name} GPU search failed unexpectedly: {error}"),
         };
-        assert_eq!(outcome.backend_name, backend.name());
+        assert_eq!(outcome.backend_name, backend_name);
         let hit = outcome
             .hit
             .expect("8-bit predicate should hit in 65536 candidates");

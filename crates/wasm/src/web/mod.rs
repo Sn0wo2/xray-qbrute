@@ -1,6 +1,7 @@
 use wasm_bindgen::prelude::*;
 
-use crate::candidate::{self, CandidateConfig, MAX_UUID_INDEX};
+#[cfg(all(feature = "wasm-simd", target_family = "wasm"))]
+use crate::candidate::{self, CandidateConfig};
 #[cfg(all(feature = "wasm-simd", target_family = "wasm"))]
 use crate::sha512_constants::{IV, ROUND_CONSTANTS};
 
@@ -17,84 +18,6 @@ mod search_runner;
 #[allow(clippy::single_call_fn, unreachable_pub)]
 pub fn start() {
     console_error_panic_hook::set_once();
-}
-
-#[allow(clippy::single_call_fn)]
-pub(crate) fn search_scalar_batch(
-    commit: u32,
-    node_suffix: u32,
-    base: u64,
-    count: u32,
-    leading_zero_bits: u32,
-) -> u64 {
-    let end = base.saturating_add(u64::from(count)).min(MAX_UUID_INDEX);
-    let config = CandidateConfig {
-        commit,
-        node_suffix,
-    };
-    (base..end)
-        .find(|&index| scalar_matches(index, config, leading_zero_bits))
-        .unwrap_or(u64::MAX)
-}
-
-#[cfg(all(feature = "wasm-simd", target_family = "wasm"))]
-pub(crate) fn search_simd_batch(
-    commit: u32,
-    node_suffix: u32,
-    base: u64,
-    count: u32,
-    leading_zero_bits: u32,
-) -> u64 {
-    let end = base.saturating_add(u64::from(count)).min(MAX_UUID_INDEX);
-    let config = CandidateConfig {
-        commit,
-        node_suffix,
-    };
-    search_simd_range(base, end, config, leading_zero_bits).unwrap_or(u64::MAX)
-}
-
-#[allow(clippy::single_call_fn)]
-pub(crate) fn result_details(commit: u32, node_suffix: u32, index: u64) -> (String, String) {
-    let config = CandidateConfig {
-        commit,
-        node_suffix,
-    };
-    let uuid = candidate::bytes_to_uuid_string(&candidate::candidate_bytes(index, config));
-    let hash = candidate::digest(index, config);
-    let digits = b"0123456789abcdef";
-    let mut hash_prefix = String::with_capacity(20);
-    for &byte in &hash[..10] {
-        hash_prefix.push(char::from(
-            *digits.get(usize::from(byte >> 4)).unwrap_or(&b'0'),
-        ));
-        hash_prefix.push(char::from(
-            *digits.get(usize::from(byte & 0x0f)).unwrap_or(&b'0'),
-        ));
-    }
-    (uuid, hash_prefix)
-}
-
-#[cfg(all(feature = "wasm-simd", target_family = "wasm"))]
-fn search_simd_range(base: u64, end: u64, config: CandidateConfig, bits: u32) -> Option<u64> {
-    let vector_end = end - (end - base) % 2;
-    let mut index = base;
-    while index < vector_end {
-        let words = simd_words([index, index + 1], config);
-        if candidate::matches_leading_zero_bits(words[0], bits) {
-            return Some(index);
-        }
-        if candidate::matches_leading_zero_bits(words[1], bits) {
-            return Some(index + 1);
-        }
-        index += 2;
-    }
-    (vector_end..end).find(|&tail| scalar_matches(tail, config, bits))
-}
-
-#[allow(clippy::single_call_fn)]
-fn scalar_matches(index: u64, config: CandidateConfig, bits: u32) -> bool {
-    let word = candidate::digest_word(&candidate::digest(index, config));
-    candidate::matches_leading_zero_bits(word, bits)
 }
 
 #[cfg(all(feature = "wasm-simd", target_family = "wasm"))]

@@ -18,9 +18,6 @@ const TUNING_CANDIDATE: CandidateConfig = CandidateConfig {
 const TUNING_WORKGROUP_SIZES: [u32; 3] = [64, 128, 256];
 const TUNING_CANDIDATES_PER_INVOCATION: [u32; 2] = [8, 16];
 #[cfg(not(test))]
-const LEGACY_PIPELINE_CACHE_SCHEMAS: [&str; 2] = ["sha512-unrolled-v1", "sha512-unrolled-v2"];
-
-#[cfg(not(test))]
 const TUNING_WARMUP_CANDIDATES: u64 = 1 << 20;
 #[cfg(test)]
 const TUNING_WARMUP_CANDIDATES: u64 = 1 << 12;
@@ -49,15 +46,6 @@ impl KernelConfig {
 pub enum WgpuBackend {
     Vulkan,
     Metal,
-}
-
-impl WgpuBackend {
-    const fn name(self) -> &'static str {
-        match self {
-            Self::Vulkan => "wgpu-vulkan",
-            Self::Metal => "wgpu-metal",
-        }
-    }
 }
 
 #[repr(C)]
@@ -124,16 +112,40 @@ pub fn search(
 impl WgpuSearchSession {
     pub fn new(selected_backend: WgpuBackend, config: SearchConfig) -> Result<Self, SearchError> {
         let context = pollster::block_on(create_context_async(selected_backend, config))?;
-        context.verify_sha512(config.candidate)?;
+        const SELF_TEST_COUNT: u64 = 256;
+        for base in [0, 1 << 28, 1 << 30, (1 << 58) - 256] {
+            let words = context.hash_first_words(base, SELF_TEST_COUNT)?;
+            for (offset, &actual) in words.iter().enumerate() {
+                let index = base + offset as u64;
+                let expected = crate::candidate::digest_word(&crate::candidate::digest(
+                    index,
+                    config.candidate,
+                ));
+                if actual != expected {
+                    return Err(SearchError::Runtime(format!(
+                        "GPU SHA-512 self-test failed at index {index}: \
+                         shader produced 0x{actual:016x}, expected 0x{expected:016x}"
+                    )));
+                }
+            }
+        }
         let buffers = create_search_buffers(&context.device, &context.search_bind_group_layout);
 
         Ok(Self { context, buffers })
     }
 
     pub fn warm_up(&self) -> Result<(), SearchError> {
-        self.context
-            .run_search_batch(&self.buffers, 0, 1 << 20)
-            .map(|_| ())
+        run_search_pipeline(
+            &self.context.device,
+            &self.context.queue,
+            &self.context.search_pipeline,
+            self.context.kernel_config,
+            &self.buffers,
+            0,
+            1 << 20,
+            self.context.backend_name,
+        )
+        .map(|_| ())
     }
 
     pub fn search(
@@ -151,9 +163,16 @@ impl WgpuSearchSession {
 
         while base < config.max_index {
             let batch_count = (config.max_index - base).min(max_batch);
-            let result = self
-                .context
-                .run_search_batch(&self.buffers, base, batch_count)?;
+            let result = run_search_pipeline(
+                &self.context.device,
+                &self.context.queue,
+                &self.context.search_pipeline,
+                self.context.kernel_config,
+                &self.buffers,
+                base,
+                batch_count,
+                self.context.backend_name,
+            )?;
 
             if result.min_offset != u32::MAX {
                 if u64::from(result.min_offset) >= batch_count {
@@ -210,7 +229,10 @@ async fn create_context_async(
     selected_backend: WgpuBackend,
     config: SearchConfig,
 ) -> Result<GpuContext, SearchError> {
-    let backend_name = selected_backend.name();
+    let backend_name = match selected_backend {
+        WgpuBackend::Vulkan => "wgpu-vulkan",
+        WgpuBackend::Metal => "wgpu-metal",
+    };
     let mut instance_descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
     instance_descriptor.backends = match selected_backend {
         WgpuBackend::Vulkan => wgpu::Backends::VULKAN,
@@ -294,7 +316,39 @@ async fn create_context_async(
 
     let tuning_start = Instant::now();
     #[cfg(not(test))]
-    cleanup_legacy_pipeline_caches(&info);
+    if let Some(cache_key) = wgpu::util::pipeline_cache_key(&info) {
+        let cache_dir = {
+            #[cfg(target_os = "windows")]
+            {
+                std::env::var_os("LOCALAPPDATA")
+                    .map(PathBuf::from)
+                    .map(|path| path.join("xray-qbrute").join("gpu-cache"))
+            }
+            #[cfg(target_os = "macos")]
+            {
+                std::env::var_os("HOME")
+                    .map(PathBuf::from)
+                    .map(|path| path.join("Library").join("Caches").join("xray-qbrute"))
+            }
+            #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+            {
+                std::env::var_os("XDG_CACHE_HOME")
+                    .map(PathBuf::from)
+                    .or_else(|| {
+                        std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".cache"))
+                    })
+                    .map(|path| path.join("xray-qbrute"))
+            }
+        };
+        if let Some(cache_dir) = cache_dir {
+            for schema in ["sha512-unrolled-v1", "sha512-unrolled-v2"] {
+                drop(std::fs::remove_file(
+                    cache_dir.join(format!("{cache_key}-{schema}.bin")),
+                ));
+            }
+            drop(std::fs::remove_dir(cache_dir));
+        }
+    }
     #[cfg(test)]
     let pipeline_cache = None;
     #[cfg(not(test))]
@@ -370,47 +424,6 @@ const fn storage_binding(binding: u32, read_only: bool) -> wgpu::BindGroupLayout
         },
         count: None,
     }
-}
-
-#[allow(clippy::single_call_fn)]
-#[cfg(not(test))]
-fn cleanup_legacy_pipeline_caches(adapter_info: &wgpu::AdapterInfo) {
-    let Some(cache_key) = wgpu::util::pipeline_cache_key(adapter_info) else {
-        return;
-    };
-    let Some(cache_dir) = pipeline_cache_dir() else {
-        return;
-    };
-    for schema in LEGACY_PIPELINE_CACHE_SCHEMAS {
-        let path = cache_dir.join(format!("{cache_key}-{schema}.bin"));
-        drop(std::fs::remove_file(path));
-    }
-    drop(std::fs::remove_dir(cache_dir));
-}
-
-#[cfg(all(not(test), target_os = "windows"))]
-#[allow(clippy::single_call_fn)]
-fn pipeline_cache_dir() -> Option<PathBuf> {
-    std::env::var_os("LOCALAPPDATA")
-        .map(PathBuf::from)
-        .map(|path| path.join("xray-qbrute").join("gpu-cache"))
-}
-
-#[cfg(all(not(test), target_os = "macos"))]
-#[allow(clippy::single_call_fn)]
-fn pipeline_cache_dir() -> Option<PathBuf> {
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .map(|path| path.join("Library").join("Caches").join("xray-qbrute"))
-}
-
-#[cfg(all(not(test), not(any(target_os = "windows", target_os = "macos"))))]
-#[allow(clippy::single_call_fn)]
-fn pipeline_cache_dir() -> Option<PathBuf> {
-    std::env::var_os("XDG_CACHE_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".cache")))
-        .map(|path| path.join("xray-qbrute"))
 }
 
 fn pipeline_constants(
@@ -510,7 +523,12 @@ fn run_search_pipeline(
     candidate_count: u64,
     backend_name: &str,
 ) -> Result<GpuResult, SearchError> {
-    let params = make_params(base, candidate_count);
+    let params = GpuParams {
+        base_lo: base as u32,
+        base_hi: (base >> 32) as u32,
+        candidate_count: candidate_count as u32,
+        reserved: 0,
+    };
     let initial_result = GpuResult {
         min_offset: u32::MAX,
         _pad: [0; 3],
@@ -719,26 +737,13 @@ fn validate_tuning_result(
 }
 
 impl GpuContext {
-    fn run_search_batch(
-        &self,
-        buffers: &SearchBuffers,
-        base: u64,
-        candidate_count: u64,
-    ) -> Result<GpuResult, SearchError> {
-        run_search_pipeline(
-            &self.device,
-            &self.queue,
-            &self.search_pipeline,
-            self.kernel_config,
-            buffers,
-            base,
-            candidate_count,
-            self.backend_name,
-        )
-    }
-
     fn hash_first_words(&self, base: u64, candidate_count: u64) -> Result<Vec<u64>, SearchError> {
-        let params = make_params(base, candidate_count);
+        let params = GpuParams {
+            base_lo: base as u32,
+            base_hi: (base >> 32) as u32,
+            candidate_count: candidate_count as u32,
+            reserved: 0,
+        };
         let output_size = candidate_count * size_of::<u64>() as u64;
         let params_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("xray-qbrute hash params"),
@@ -799,40 +804,6 @@ impl GpuContext {
             self.backend_name,
         )?;
         Ok(bytemuck::cast_slice(&bytes).to_vec())
-    }
-
-    /// Runtime self-test: hashes known candidate indices on the GPU and
-    /// compares the first digest word against the CPU reference implementation.
-    /// Catches shader bugs, driver miscompiles, or GPU bit flips before the
-    /// real search starts.
-    fn verify_sha512(&self, candidate: CandidateConfig) -> Result<(), SearchError> {
-        const SELF_TEST_COUNT: u64 = 256;
-        const SELF_TEST_BASES: [u64; 4] = [0, 1 << 28, 1 << 30, (1 << 58) - 256];
-
-        for base in SELF_TEST_BASES {
-            let words = self.hash_first_words(base, SELF_TEST_COUNT)?;
-            for (offset, &actual) in words.iter().enumerate() {
-                let index = base + offset as u64;
-                let hash = crate::candidate::digest(index, candidate);
-                let expected = crate::candidate::digest_word(&hash);
-                if actual != expected {
-                    return Err(SearchError::Runtime(format!(
-                        "GPU SHA-512 self-test failed at index {index}: \
-                         shader produced 0x{actual:016x}, expected 0x{expected:016x}"
-                    )));
-                }
-            }
-        }
-        Ok(())
-    }
-}
-
-const fn make_params(base: u64, candidate_count: u64) -> GpuParams {
-    GpuParams {
-        base_lo: base as u32,
-        base_hi: (base >> 32) as u32,
-        candidate_count: candidate_count as u32,
-        reserved: 0,
     }
 }
 
