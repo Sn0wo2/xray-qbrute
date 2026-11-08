@@ -2068,7 +2068,7 @@ dependencies = [
 
 [[package]]
 name = "xray-qbrute-cli"
-version = "0.0.0"
+version = "0.0.1"
 dependencies = [
  "acta",
  "acta-build",
@@ -2086,7 +2086,7 @@ dependencies = [
 
 [[package]]
 name = "xray-qbrute-core"
-version = "0.0.0"
+version = "0.0.1"
 dependencies = [
  "bytemuck",
  "clap",
@@ -2102,7 +2102,7 @@ dependencies = [
 
 [[package]]
 name = "xray-qbrute-wasm"
-version = "0.0.0"
+version = "0.0.1"
 dependencies = [
  "acta",
  "bytemuck",
