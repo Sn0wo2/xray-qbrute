@@ -283,9 +283,14 @@ jobs:
           ((${#files[@]}))
           sha256sum -- "${files[@]}" > checksums.txt
 
+      - name: Prepare publishing configuration
+        run: |
+          cp .goreleaser.yaml "$RUNNER_TEMP/goreleaser-publish.yml"
+          printf '\ndist: %s\n' "$RUNNER_TEMP/goreleaser-publish" >> "$RUNNER_TEMP/goreleaser-publish.yml"
+
       - uses: goreleaser/goreleaser-action@v7
         with:
-          args: release --skip=before,archive,validate
+          args: release --skip=before,archive,validate --config=${{ runner.temp }}/goreleaser-publish.yml
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           BUILD_PLATFORM: release
