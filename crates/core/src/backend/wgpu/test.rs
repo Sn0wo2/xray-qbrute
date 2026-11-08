@@ -29,14 +29,10 @@ const TEST_BACKENDS: &[WgpuBackend] = &[WgpuBackend::Metal];
 const TEST_BACKENDS: &[WgpuBackend] = &[WgpuBackend::Vulkan];
 
 fn context_or_skip(backend: WgpuBackend, config: SearchConfig) -> Option<GpuContext> {
-    let backend_name = match backend {
-        WgpuBackend::Vulkan => "wgpu-vulkan",
-        WgpuBackend::Metal => "wgpu-metal",
-    };
     match pollster::block_on(create_context_async(backend, config)) {
         Ok(context) => Some(context),
         Err(SearchError::Unavailable(reason)) => {
-            eprintln!("Skipping {backend_name} GPU test: {reason}");
+            eprintln!("Skipping {} GPU test: {reason}", backend.name());
             None
         }
         Err(error) => panic!("GPU initialization failed unexpectedly: {error}"),
@@ -46,10 +42,7 @@ fn context_or_skip(backend: WgpuBackend, config: SearchConfig) -> Option<GpuCont
 #[test]
 fn gpu_hashes_match_scalar() {
     for &backend in TEST_BACKENDS {
-        let backend_name = match backend {
-            WgpuBackend::Vulkan => "wgpu-vulkan",
-            WgpuBackend::Metal => "wgpu-metal",
-        };
+        let backend_name = backend.name();
         for candidate_config in [CONFIG, ALTERNATE_CONFIG] {
             let search_config = SearchConfig {
                 candidate: candidate_config,
@@ -89,10 +82,7 @@ fn gpu_search_finds_valid_hit() {
     };
 
     for &backend in TEST_BACKENDS {
-        let backend_name = match backend {
-            WgpuBackend::Vulkan => "wgpu-vulkan",
-            WgpuBackend::Metal => "wgpu-metal",
-        };
+        let backend_name = backend.name();
         let outcome = match search(&config, backend, &progress) {
             Ok(outcome) => outcome,
             Err(SearchError::Unavailable(reason)) => {
@@ -105,10 +95,10 @@ fn gpu_search_finds_valid_hit() {
         let hit = outcome
             .hit
             .expect("8-bit predicate should hit in 65536 candidates");
-        assert!(hit.index < config.max_index);
+        assert!(hit < config.max_index);
         assert!(outcome.processed > 0);
         assert!(outcome.processed <= config.max_index);
-        let word = candidate::digest_word(&candidate::digest(hit.index, CONFIG));
+        let word = candidate::digest_word(&candidate::digest(hit, CONFIG));
         assert!(candidate::matches_leading_zero_bits(
             word,
             config.leading_zero_bits
@@ -136,7 +126,7 @@ fn gpu_search_returns_minimum_match() {
         Err(error) => panic!("GPU search failed unexpectedly: {error}"),
     };
 
-    assert_eq!(outcome.hit, Some(SearchHit { index: 0 }));
+    assert_eq!(outcome.hit, Some(0));
     assert_eq!(outcome.processed, 1);
     assert_eq!(outcome.evaluated, config.max_index);
 }
@@ -166,7 +156,7 @@ fn gpu_session_reuses_resources() {
         .search(&config, &progress)
         .expect("second warm search");
 
-    assert_eq!(first.hit, Some(SearchHit { index: 0 }));
+    assert_eq!(first.hit, Some(0));
     assert_eq!(second.hit, first.hit);
     assert_eq!(second.processed, first.processed);
     assert_eq!(second.evaluated, first.evaluated);

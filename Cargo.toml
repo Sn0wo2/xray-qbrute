@@ -165,6 +165,10 @@ unescaped_backticks = "warn"
 [workspace.dependencies]
 sha2 = "0.11.1"
 thiserror = "2.0.21"
+acta = "0.8.4"
+acta-build = "0.8.4"
+tracing = "0.1.43"
+tracing-subscriber = { version = "0.3.21", features = ["env-filter"] }
 bytemuck = { version = "1.25.2", features = ["derive"] }
 rayon = "1.12.0"
 wgpu = { version = "30.0.1", default-features = false }

@@ -39,34 +39,56 @@ pub(super) struct GpuSession {
     pub(super) adapter_name: String,
 }
 
+#[derive(Clone)]
+pub(super) struct GpuContext {
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+    adapter_name: String,
+}
+
+thread_local! {
+    static GPU_CONTEXT: RefCell<Option<GpuContext>> = const { RefCell::new(None) };
+}
+
+pub(super) async fn ensure_context() -> Result<GpuContext, String> {
+    if let Some(context) = GPU_CONTEXT.with_borrow(Clone::clone) {
+        return Ok(context);
+    }
+    let mut instance_descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
+    instance_descriptor.backends = wgpu::Backends::BROWSER_WEBGPU;
+    let instance = wgpu::Instance::new(instance_descriptor);
+    let adapter = instance
+        .request_adapter(&wgpu::RequestAdapterOptions::default())
+        .await
+        .map_err(|error| format!("WebGPU adapter request failed: {error}"))?;
+    let adapter_name = adapter.get_info().name;
+    tracing::debug!(adapter = %adapter_name, "adapter selected");
+    let (device, queue) = adapter
+        .request_device(&wgpu::DeviceDescriptor {
+            label: Some("xray-qbrute browser WebGPU device"),
+            required_features: wgpu::Features::empty(),
+            required_limits: adapter.limits(),
+            ..Default::default()
+        })
+        .await
+        .map_err(|error| format!("WebGPU device request failed: {error}"))?;
+    let context = GpuContext {
+        device,
+        queue,
+        adapter_name,
+    };
+    GPU_CONTEXT.with_borrow_mut(|slot| *slot = Some(context.clone()));
+    Ok(context)
+}
+
 impl GpuSession {
     #[allow(clippy::single_call_fn)]
     pub(super) async fn new(request: SearchRequest) -> Result<Self, String> {
-        if request.debug {
-            web_sys::console::debug_1(&"[wasm:webgpu] requesting browser adapter".into());
-        }
-        let mut instance_descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
-        instance_descriptor.backends = wgpu::Backends::BROWSER_WEBGPU;
-        let instance = wgpu::Instance::new(instance_descriptor);
-        let adapter = instance
-            .request_adapter(&wgpu::RequestAdapterOptions::default())
-            .await
-            .map_err(|error| format!("WebGPU adapter request failed: {error}"))?;
-        let adapter_name = adapter.get_info().name;
-        if request.debug {
-            web_sys::console::debug_1(
-                &format!("[wasm:webgpu] adapter selected: {adapter_name}").into(),
-            );
-        }
-        let (device, queue) = adapter
-            .request_device(&wgpu::DeviceDescriptor {
-                label: Some("xray-qbrute browser WebGPU device"),
-                required_features: wgpu::Features::empty(),
-                required_limits: adapter.limits(),
-                ..Default::default()
-            })
-            .await
-            .map_err(|error| format!("WebGPU device request failed: {error}"))?;
+        let GpuContext {
+            device,
+            queue,
+            adapter_name,
+        } = ensure_context().await?;
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("xray-qbrute browser SHA-512 WGSL"),
             source: wgpu::ShaderSource::Wgsl(
@@ -94,9 +116,7 @@ impl GpuSession {
             },
             cache: None,
         });
-        if request.debug {
-            web_sys::console::debug_1(&"[wasm:webgpu] pipeline created".into());
-        }
+        tracing::debug!("pipeline created");
         let params = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("xray-qbrute browser search params"),
             size: size_of::<GpuParams>() as u64,
@@ -144,11 +164,7 @@ impl GpuSession {
             adapter_name,
         };
         session.dispatch(0, GPU_WARM_UP_SIZE).await?;
-        if request.debug {
-            web_sys::console::debug_1(
-                &format!("[wasm:webgpu] warm-up complete candidates={GPU_WARM_UP_SIZE}").into(),
-            );
-        }
+        tracing::debug!(candidates = GPU_WARM_UP_SIZE, "warm-up complete");
         Ok(session)
     }
 

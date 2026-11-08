@@ -22,6 +22,7 @@ pub fn start() {
 
 #[cfg(all(feature = "wasm-simd", target_family = "wasm"))]
 #[target_feature(enable = "simd128")]
+#[allow(clippy::single_call_fn, clippy::indexing_slicing)]
 fn simd_words(indices: [u64; 2], config: CandidateConfig) -> [u64; 2] {
     use core::arch::wasm32::*;
 
@@ -38,7 +39,7 @@ fn simd_words(indices: [u64; 2], config: CandidateConfig) -> [u64; 2] {
     let mut schedule = [zero; 16];
     schedule[0] = pair(candidates[0][0], candidates[1][0]);
     schedule[1] = pair(candidates[0][1], candidates[1][1]);
-    schedule[2] = u64x2_splat(0x8000000000000000);
+    schedule[2] = u64x2_splat(0x8000_0000_0000_0000);
     schedule[15] = u64x2_splat(128);
     let mut state = IV.map(|word| u64x2_splat(word));
 

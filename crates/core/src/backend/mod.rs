@@ -8,6 +8,8 @@ pub mod avx2;
 pub mod cuda;
 #[cfg(feature = "scalar")]
 pub mod scalar;
+#[cfg(any(feature = "cuda", feature = "wgpu"))]
+pub mod utils;
 #[cfg(feature = "wgpu")]
 pub mod wgpu;
 
@@ -22,16 +24,10 @@ pub struct SearchConfig {
     pub leading_zero_bits: u32,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[allow(clippy::exhaustive_structs)]
-pub struct SearchHit {
-    pub index: u64,
-}
-
 #[derive(Clone, Debug)]
 #[allow(clippy::exhaustive_structs, clippy::module_name_repetitions)]
 pub struct BackendOutcome {
-    pub hit: Option<SearchHit>,
+    pub hit: Option<u64>,
     pub processed: u64,
     pub evaluated: u64,
     pub backend_name: String,
@@ -43,15 +39,6 @@ pub struct BackendOutcome {
 }
 
 pub type ProgressReporter = Arc<dyn Fn(u64) + Send + Sync>;
-
-pub fn hit_probability(attempts: u64, leading_zero_bits: u32) -> f64 {
-    let work_factor = 2_f64.powi(leading_zero_bits as i32);
-    -(-(attempts as f64) / work_factor).exp_m1()
-}
-
-pub fn expected_search_seconds(leading_zero_bits: u32, rate_per_second: f64) -> f64 {
-    2_f64.powi(leading_zero_bits as i32) / rate_per_second.max(f64::EPSILON)
-}
 
 #[derive(Debug, thiserror::Error)]
 #[allow(clippy::exhaustive_enums)]

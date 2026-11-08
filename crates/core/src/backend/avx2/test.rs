@@ -1,7 +1,6 @@
 #![allow(clippy::expect_used, clippy::indexing_slicing)]
 
 use super::*;
-use crate::backend::SearchHit;
 use crate::candidate::CandidateConfig;
 
 const CONFIG: CandidateConfig = CandidateConfig {
@@ -23,7 +22,7 @@ fn rustcrypto_avx2_search_handles_scalar_tail() {
         leading_zero_bits: 0,
     };
     let outcome = search(&config, &progress).expect("AVX2 must be available");
-    assert_eq!(outcome.hit, Some(SearchHit { index: 0 }));
+    assert_eq!(outcome.hit, Some(0));
     assert_eq!(outcome.processed, 1);
     assert_eq!(outcome.backend_name, "avx2-4x");
 }

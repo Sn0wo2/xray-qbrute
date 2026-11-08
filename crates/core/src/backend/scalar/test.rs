@@ -23,6 +23,6 @@ fn bounded_search_reports_a_valid_hit() {
 
     let outcome = search(&config, &progress_callback);
     let hit = outcome.hit.expect("zero-bit predicate must hit");
-    assert!(hit.index < config.max_index);
+    assert!(hit < config.max_index);
     assert_eq!(outcome.processed, 1);
 }

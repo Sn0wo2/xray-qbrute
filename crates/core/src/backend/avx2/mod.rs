@@ -3,9 +3,7 @@ use rayon::prelude::*;
 use crate::candidate::{self, CandidateConfig};
 use crate::sha512_constants::{IV, ROUND_CONSTANTS};
 
-use super::{
-    BackendOutcome, ProgressReporter, SEARCH_CHUNK_SIZE, SearchConfig, SearchError, SearchHit,
-};
+use super::{BackendOutcome, ProgressReporter, SEARCH_CHUNK_SIZE, SearchConfig, SearchError};
 
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 pub fn is_available() -> bool {
@@ -41,58 +39,49 @@ pub fn search(
 
     let mut start = config.start_index;
     let mut evaluated = 0_u64;
-
-    while start < config.max_index {
-        let end = (start + SEARCH_CHUNK_SIZE).min(config.max_index);
-        let vector_end = end - (end - start) % 4;
-        let min_index = (0..(vector_end - start) / 4)
-            .into_par_iter()
-            .filter_map(|block| {
-                let index = start + block * 4;
-                let indices = [index, index + 1, index + 2, index + 3];
-                let words = first_digest_words(indices, config.candidate);
-                words
-                    .iter()
-                    .position(|&word| {
-                        candidate::matches_leading_zero_bits(word, config.leading_zero_bits)
-                    })
-                    .and_then(|lane| indices.get(lane).copied())
-            })
-            .min()
-            .or_else(|| {
-                (vector_end..end).find(|&index| {
-                    let word = candidate::digest_word(&candidate::digest(index, config.candidate));
-                    candidate::matches_leading_zero_bits(word, config.leading_zero_bits)
+    let hit = 'search: {
+        while start < config.max_index {
+            let end = (start + SEARCH_CHUNK_SIZE).min(config.max_index);
+            let vector_end = end - (end - start) % 4;
+            let mut min_index = (0..(vector_end - start) / 4)
+                .into_par_iter()
+                .filter_map(|block| {
+                    let index = start + block * 4;
+                    let indices = [index, index + 1, index + 2, index + 3];
+                    first_digest_words(indices, config.candidate)
+                        .iter()
+                        .position(|&word| {
+                            candidate::matches_leading_zero_bits(word, config.leading_zero_bits)
+                        })
+                        .and_then(|lane| indices.get(lane).copied())
                 })
-            });
-        evaluated += vector_end - start;
-        if min_index.is_none() {
-            evaluated += end - vector_end;
-        }
+                .min();
+            evaluated += vector_end - start;
+            if min_index.is_none() {
+                min_index = (vector_end..end).find(|&index| {
+                    candidate::matches_leading_zero_bits(
+                        candidate::digest_word(&candidate::digest(index, config.candidate)),
+                        config.leading_zero_bits,
+                    )
+                });
+                if min_index.is_none() {
+                    evaluated += end - vector_end;
+                }
+            }
 
-        if let Some(index) = min_index {
-            let processed = index + 1;
-            progress(processed - start);
-            return Ok(BackendOutcome {
-                hit: Some(SearchHit { index }),
-                processed,
-                evaluated,
-                backend_name: "avx2-4x".to_owned(),
-                device_name: None,
-                fallback_reasons: Vec::new(),
-                search_elapsed: None,
-                kernel_config: None,
-                tuning_elapsed: None,
-            });
+            if let Some(index) = min_index {
+                progress(index + 1 - start);
+                break 'search Some(index);
+            }
+            progress(end - start);
+            start = end;
         }
-
-        progress(end - start);
-        start = end;
-    }
+        None
+    };
 
     Ok(BackendOutcome {
-        hit: None,
-        processed: config.max_index,
+        hit,
+        processed: hit.map_or(config.max_index, |index| index + 1),
         evaluated,
         backend_name: "avx2-4x".to_owned(),
         device_name: None,

@@ -30,6 +30,16 @@ pub enum BackendKind {
     Cuda,
 }
 
+impl std::fmt::Display for BackendKind {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(
+            self.to_possible_value()
+                .as_ref()
+                .map_or("auto", clap::builder::PossibleValue::get_name),
+        )
+    }
+}
+
 #[derive(Debug)]
 enum PreparedBackend {
     #[cfg(feature = "scalar")]
@@ -37,39 +47,16 @@ enum PreparedBackend {
     #[cfg(feature = "avx2")]
     Avx2,
     #[cfg(feature = "wgpu")]
-    Wgpu {
-        kind: BackendKind,
-        session: Box<backend::wgpu::WgpuSearchSession>,
-    },
+    Wgpu(Box<backend::wgpu::WgpuSearchSession>),
     #[cfg(feature = "cuda")]
-    Cuda {
-        session: Box<backend::cuda::CudaSearchSession>,
-    },
+    Cuda(Box<backend::cuda::CudaSearchSession>),
 }
 
 #[derive(Debug)]
 #[allow(clippy::module_name_repetitions)]
 pub struct PreparedSearch {
-    backends: Vec<PreparedBackend>,
+    backends: Vec<(BackendKind, PreparedBackend)>,
     fallback_reasons: Vec<String>,
-}
-
-impl std::fmt::Display for BackendKind {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(match self {
-            Self::Auto => "auto",
-            #[cfg(feature = "scalar")]
-            Self::Scalar => "scalar",
-            #[cfg(feature = "avx2")]
-            Self::Avx2 => "avx2",
-            #[cfg(feature = "wgpu")]
-            Self::WgpuVulkan => "wgpu-vulkan",
-            #[cfg(feature = "wgpu")]
-            Self::WgpuMetal => "wgpu-metal",
-            #[cfg(feature = "cuda")]
-            Self::Cuda => "cuda",
-        })
-    }
 }
 
 pub fn search(
@@ -102,7 +89,7 @@ pub fn prepare(
             BackendKind::Scalar,
         ] {
             match prepare_backend(config, backend) {
-                Ok(prepared) => backends.push(prepared),
+                Ok(prepared) => backends.push((backend, prepared)),
                 Err(SearchError::Unavailable(reason)) => {
                     fallback_reasons.push(format!("{backend}: {reason}"));
                 }
@@ -123,7 +110,7 @@ pub fn prepare(
     }
 
     Ok(PreparedSearch {
-        backends: vec![prepare_backend(config, requested)?],
+        backends: vec![(requested, prepare_backend(config, requested)?)],
         fallback_reasons: Vec::new(),
     })
 }
@@ -137,16 +124,16 @@ impl PreparedSearch {
         validate_config(config)?;
         let mut fallback_reasons = self.fallback_reasons.clone();
 
-        for (position, backend) in self.backends.iter().enumerate() {
+        for (position, (kind, backend)) in self.backends.iter().enumerate() {
             let outcome = match backend {
                 #[cfg(feature = "scalar")]
                 PreparedBackend::Scalar => Ok(backend::scalar::search(config, progress)),
                 #[cfg(feature = "avx2")]
                 PreparedBackend::Avx2 => backend::avx2::search(config, progress),
                 #[cfg(feature = "wgpu")]
-                PreparedBackend::Wgpu { session, .. } => session.search(config, progress),
+                PreparedBackend::Wgpu(session) => session.search(config, progress),
                 #[cfg(feature = "cuda")]
-                PreparedBackend::Cuda { session, .. } => session.search(config, progress),
+                PreparedBackend::Cuda(session) => session.search(config, progress),
             };
 
             match outcome {
@@ -155,19 +142,7 @@ impl PreparedSearch {
                     return Ok(outcome);
                 }
                 Err(SearchError::Unavailable(reason)) if position + 1 < self.backends.len() => {
-                    fallback_reasons.push(format!(
-                        "{}: {reason}",
-                        match backend {
-                            #[cfg(feature = "scalar")]
-                            PreparedBackend::Scalar => BackendKind::Scalar,
-                            #[cfg(feature = "avx2")]
-                            PreparedBackend::Avx2 => BackendKind::Avx2,
-                            #[cfg(feature = "wgpu")]
-                            PreparedBackend::Wgpu { kind, .. } => *kind,
-                            #[cfg(feature = "cuda")]
-                            PreparedBackend::Cuda { .. } => BackendKind::Cuda,
-                        }
-                    ));
+                    fallback_reasons.push(format!("{kind}: {reason}"));
                 }
                 Err(error) => return Err(error),
             }
@@ -205,20 +180,12 @@ fn prepare_backend(
         #[cfg(feature = "wgpu")]
         BackendKind::WgpuVulkan | BackendKind::WgpuMetal => {
             let selected = match backend {
-                BackendKind::WgpuVulkan => backend::wgpu::WgpuBackend::Vulkan,
                 BackendKind::WgpuMetal => backend::wgpu::WgpuBackend::Metal,
-                _ => {
-                    return Err(SearchError::InvalidConfig(
-                        "requested backend is not a WGPU backend".to_owned(),
-                    ));
-                }
+                _ => backend::wgpu::WgpuBackend::Vulkan,
             };
-            let session = backend::wgpu::WgpuSearchSession::new(selected, *config)?;
-            session.warm_up()?;
-            Ok(PreparedBackend::Wgpu {
-                kind: backend,
-                session: Box::new(session),
-            })
+            Ok(PreparedBackend::Wgpu(Box::new(
+                backend::wgpu::WgpuSearchSession::new(selected, *config)?,
+            )))
         }
         #[cfg(feature = "cuda")]
         BackendKind::Cuda => {
@@ -227,11 +194,9 @@ fn prepare_backend(
                     "CUDA is not available (no NVIDIA GPU or driver)".to_owned(),
                 ));
             }
-            let session = backend::cuda::CudaSearchSession::new(*config)?;
-            session.warm_up()?;
-            Ok(PreparedBackend::Cuda {
-                session: Box::new(session),
-            })
+            Ok(PreparedBackend::Cuda(Box::new(
+                backend::cuda::CudaSearchSession::new(*config)?,
+            )))
         }
     }
 }

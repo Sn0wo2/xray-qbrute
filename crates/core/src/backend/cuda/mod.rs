@@ -7,9 +7,9 @@ use std::time::Instant;
 use cudarc::driver::{CudaContext, LaunchConfig, PushKernelArg};
 use cudarc::nvrtc::compile_ptx;
 
-use crate::candidate;
-
-use super::{BackendOutcome, ProgressReporter, SearchConfig, SearchError, SearchHit};
+use super::{
+    BackendOutcome, ProgressReporter, SEARCH_CHUNK_SIZE, SearchConfig, SearchError, utils,
+};
 
 const CANDIDATES_PER_INVOCATION: u32 = 32;
 const BLOCK_SIZE: u32 = 256;
@@ -39,8 +39,7 @@ impl fmt::Debug for CudaSearchSession {
 }
 
 #[cfg(any(target_os = "windows", target_os = "linux"))]
-#[allow(clippy::single_call_fn)]
-fn locate_cuda_bin_dir() -> Option<PathBuf> {
+fn ensure_cuda_bin_on_path() {
     let mut roots = Vec::new();
 
     for key in ["CUDA_PATH", "CUDA_HOME"] {
@@ -120,7 +119,7 @@ fn locate_cuda_bin_dir() -> Option<PathBuf> {
         }
     }
 
-    probes.into_iter().find(|dir| {
+    let Some(dir) = probes.into_iter().find(|dir| {
         std::fs::read_dir(dir).is_ok_and(|entries| {
             entries.flatten().any(|entry| {
                 let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
@@ -134,34 +133,26 @@ fn locate_cuda_bin_dir() -> Option<PathBuf> {
                 }
             })
         })
-    })
-}
-
-#[cfg(target_os = "windows")]
-fn ensure_cuda_bin_on_path() {
-    let Some(dir) = locate_cuda_bin_dir() else {
+    }) else {
         return;
     };
-    let dir_str = dir.to_string_lossy().into_owned();
-    let current = std::env::var("PATH").unwrap_or_default();
-    if !current.split(';').any(|p| p.eq_ignore_ascii_case(&dir_str)) {
-        unsafe {
-            std::env::set_var("PATH", format!("{dir_str};{current}"));
-        }
-    }
-}
 
-#[cfg(target_os = "linux")]
-fn ensure_cuda_bin_on_path() {
-    let Some(dir) = locate_cuda_bin_dir() else {
-        return;
+    let (variable, separator) = if cfg!(target_os = "windows") {
+        ("PATH", ";")
+    } else {
+        ("LD_LIBRARY_PATH", ":")
     };
     let dir_str = dir.to_string_lossy().into_owned();
-    let current = std::env::var("LD_LIBRARY_PATH").unwrap_or_default();
-    if !current.split(':').any(|p| p == dir_str) {
-        unsafe {
-            std::env::set_var("LD_LIBRARY_PATH", format!("{dir_str}:{current}"));
+    let current = std::env::var(variable).unwrap_or_default();
+    let installed = current.split(separator).any(|entry| {
+        if cfg!(target_os = "windows") {
+            entry.eq_ignore_ascii_case(&dir_str)
+        } else {
+            entry == dir_str
         }
+    });
+    if !installed {
+        unsafe { std::env::set_var(variable, format!("{dir_str}{separator}{current}")) };
     }
 }
 
@@ -180,6 +171,7 @@ fn catch_silent<T>(f: impl FnOnce() -> T + std::panic::UnwindSafe) -> std::threa
     std::panic::set_hook(previous);
     result
 }
+
 impl CudaSearchSession {
     pub fn new(config: SearchConfig) -> Result<Self, SearchError> {
         ensure_cuda_bin_on_path();
@@ -219,26 +211,13 @@ impl CudaSearchSession {
             leading_zero_bits: config.leading_zero_bits,
         };
 
-        for base in [0, 1 << 28, 1 << 30, (1 << 58) - 256] {
-            let words = session.hash_first_words(base, 256)?;
-            for (offset, &actual) in words.iter().enumerate() {
-                let index = base + offset as u64;
-                let expected = candidate::digest_word(&candidate::digest(index, config.candidate));
-                if actual != expected {
-                    return Err(SearchError::Runtime(format!(
-                        "CUDA SHA-512 self-test failed at index {index}: \
-                         kernel produced 0x{actual:016x}, expected 0x{expected:016x}"
-                    )));
-                }
-            }
+        for base in utils::SELF_TEST_BASES {
+            let words = session.hash_first_words(base, utils::SELF_TEST_COUNT)?;
+            utils::verify_digest_words(&words, base, config.candidate, "CUDA")?;
         }
+        session.run_search_batch(0, SEARCH_CHUNK_SIZE, config.leading_zero_bits)?;
 
         Ok(session)
-    }
-
-    pub fn warm_up(&self) -> Result<(), SearchError> {
-        self.run_search_batch(0, 1 << 16, self.leading_zero_bits)?;
-        Ok(())
     }
 
     pub fn search(
@@ -249,43 +228,30 @@ impl CudaSearchSession {
         let mut base = config.start_index;
         let mut evaluated = 0_u64;
         let search_start = Instant::now();
-
-        while base < config.max_index {
-            let batch_count = (config.max_index - base).min(MAX_BATCH);
-            let result = self.run_search_batch(base, batch_count, config.leading_zero_bits)?;
-
-            if result != u32::MAX {
-                if u64::from(result) >= batch_count {
-                    return Err(SearchError::Runtime(format!(
-                        "CUDA kernel returned offset {result} outside a {batch_count}-candidate batch"
-                    )));
+        let hit = 'search: {
+            while base < config.max_index {
+                let batch_count = (config.max_index - base).min(MAX_BATCH);
+                let result = self.run_search_batch(base, batch_count, config.leading_zero_bits)?;
+                evaluated += batch_count;
+                if result != u32::MAX {
+                    if u64::from(result) >= batch_count {
+                        return Err(SearchError::Runtime(format!(
+                            "CUDA kernel returned offset {result} outside a {batch_count}-candidate batch"
+                        )));
+                    }
+                    let index = base + u64::from(result);
+                    progress(index + 1 - base);
+                    break 'search Some(index);
                 }
-                let index = base + u64::from(result);
-                let processed = index + 1;
-                progress(processed - base);
-                return Ok(BackendOutcome {
-                    hit: Some(SearchHit { index }),
-                    processed,
-                    evaluated: evaluated + batch_count,
-                    backend_name: "cuda".to_owned(),
-                    device_name: Some("NVIDIA CUDA".to_owned()),
-                    fallback_reasons: Vec::new(),
-                    search_elapsed: Some(search_start.elapsed()),
-                    kernel_config: Some(format!(
-                        "block={BLOCK_SIZE}, candidates/thread={CANDIDATES_PER_INVOCATION}"
-                    )),
-                    tuning_elapsed: None,
-                });
+                progress(batch_count);
+                base += batch_count;
             }
-
-            evaluated += batch_count;
-            progress(batch_count);
-            base += batch_count;
-        }
+            None
+        };
 
         Ok(BackendOutcome {
-            hit: None,
-            processed: config.max_index,
+            hit,
+            processed: hit.map_or(config.max_index, |index| index + 1),
             evaluated,
             backend_name: "cuda".to_owned(),
             device_name: Some("NVIDIA CUDA".to_owned()),
@@ -388,5 +354,6 @@ impl CudaSearchSession {
             .map_err(|error| SearchError::Runtime(format!("CUDA hash readback failed: {error:?}")))
     }
 }
+
 #[cfg(test)]
 mod test;

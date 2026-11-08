@@ -1,7 +1,6 @@
 #![allow(clippy::expect_used, clippy::panic, clippy::print_stderr)]
 
 use super::*;
-use crate::backend::SearchHit;
 use crate::candidate::{self, CandidateConfig};
 
 const CONFIG: CandidateConfig = CandidateConfig {
@@ -31,8 +30,6 @@ fn cuda_search_reports_a_valid_hit() {
     let Some(session) = session_or_skip() else {
         return;
     };
-    session.warm_up().expect("CUDA warm-up must succeed");
-
     let progress: ProgressReporter = Arc::new(|_| {});
     let config = SearchConfig {
         candidate: CONFIG,
@@ -43,7 +40,7 @@ fn cuda_search_reports_a_valid_hit() {
     let outcome = session
         .search(&config, &progress)
         .expect("CUDA search must succeed");
-    assert_eq!(outcome.hit, Some(SearchHit { index: 0 }));
+    assert_eq!(outcome.hit, Some(0));
     assert_eq!(outcome.processed, 1);
     assert_eq!(outcome.backend_name, "cuda");
 }

@@ -39,5 +39,3 @@ rustflags = [
   "link-arg=--export=__tls_base",
 ]
 
-[unstable]
-#build-std = ["panic_abort", "std"]

@@ -1,8 +1,7 @@
-use std::cell::Cell;
-#[cfg(feature = "wasm-webgpu")]
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
+use acta::TracingGuard;
 use wasm_bindgen::{JsCast, closure::Closure, prelude::*};
 use wasm_bindgen_futures::spawn_local;
 use web_sys::{DedicatedWorkerGlobalScope, MessageEvent};
@@ -10,10 +9,32 @@ use web_sys::{DedicatedWorkerGlobalScope, MessageEvent};
 #[cfg(feature = "wasm-webgpu")]
 use super::gpu::GpuSession;
 use super::protocol::{BackendRequest, CoordinatorCommand, CpuKernel, SearchEvent, SearchRequest};
+
+thread_local! {
+    static WORKER_LOG_GUARD: RefCell<Option<TracingGuard>> = const { RefCell::new(None) };
+}
+
+#[allow(clippy::single_call_fn)]
+fn init_worker_logger() {
+    if let Ok(guard) = acta::init(acta::Config::builder().build()) {
+        WORKER_LOG_GUARD.with_borrow_mut(|slot| *slot = Some(guard));
+    }
+}
+
+#[allow(clippy::single_call_fn)]
+fn set_worker_filter(directive: &str) {
+    WORKER_LOG_GUARD.with_borrow(|slot| {
+        if let Some(guard) = slot.as_ref() {
+            guard
+                .set_filter(tracing_subscriber::EnvFilter::new(directive))
+                .ok();
+        }
+    });
+}
+
 pub(super) struct Controller {
     pub(super) scope: DedicatedWorkerGlobalScope,
     pub(super) cancelled: Rc<Cell<bool>>,
-    debug_enabled: Rc<Cell<bool>>,
     #[cfg(feature = "wasm-webgpu")]
     gpu_session: Rc<RefCell<Option<GpuCacheEntry>>>,
 }
@@ -32,11 +53,11 @@ type GpuCacheEntry = (GpuKey, Rc<GpuSession>);
 #[wasm_bindgen]
 #[allow(clippy::single_call_fn, trivial_casts, unreachable_pub)]
 pub fn install_coordinator() -> Result<(), JsValue> {
+    init_worker_logger();
     let scope: DedicatedWorkerGlobalScope = js_sys::global().dyn_into()?;
     let controller = Rc::new(Controller {
         scope: scope.clone(),
         cancelled: Rc::new(Cell::new(false)),
-        debug_enabled: Rc::new(Cell::new(false)),
         #[cfg(feature = "wasm-webgpu")]
         gpu_session: Rc::new(RefCell::new(None)),
     });
@@ -44,20 +65,23 @@ pub fn install_coordinator() -> Result<(), JsValue> {
         let command = serde_wasm_bindgen::from_value::<CoordinatorCommand>(event.data());
         match command {
             Ok(CoordinatorCommand::Stop) => {
-                controller.debug("stop requested");
+                tracing::debug!("stop requested");
                 controller.cancelled.set(true);
             }
             Ok(CoordinatorCommand::Start { request }) => {
-                controller.debug_enabled.set(request.debug);
-                controller.debug(&format!(
-                    "start backend={:?} threads={} max_index={} difficulty={}",
-                    request.backend, request.threads, request.max_index, request.difficulty
-                ));
+                set_worker_filter(if request.debug { "debug" } else { "info" });
+                tracing::debug!(
+                    backend = ?request.backend,
+                    threads = request.threads,
+                    max_index = request.max_index,
+                    difficulty = request.difficulty,
+                    "search start requested"
+                );
                 controller.cancelled.set(false);
                 let controller = Rc::clone(&controller);
                 spawn_local(async move {
                     if let Err(message) = controller.run(request).await {
-                        controller.debug(&format!("search failed: {message}"));
+                        tracing::error!("search failed: {message}");
                         controller.post(&SearchEvent::Error { message });
                     }
                 });
@@ -73,6 +97,17 @@ pub fn install_coordinator() -> Result<(), JsValue> {
         .map_err(|error| JsValue::from_str(&error.to_string()))?;
     scope.post_message(&ready)?;
     Ok(())
+}
+
+#[cfg(feature = "wasm-webgpu")]
+#[wasm_bindgen]
+#[allow(clippy::single_call_fn, unreachable_pub)]
+pub fn prewarm_gpu() {
+    spawn_local(async {
+        if super::gpu::ensure_context().await.is_err() {
+            tracing::debug!("WebGPU prewarm failed; will retry on start");
+        }
+    });
 }
 
 impl Controller {
@@ -92,7 +127,7 @@ impl Controller {
             BackendRequest::Auto => match self.prepare_gpu(request).await {
                 Ok(_) => BackendRequest::Webgpu,
                 Err(error) => {
-                    self.debug(&format!("WebGPU prepare fallback: {error}"));
+                    tracing::debug!("WebGPU prepare fallback: {error}");
                     fallbacks.push(format!("webgpu: {error}"));
                     BackendRequest::WasmSimd
                 }
@@ -154,7 +189,7 @@ impl Controller {
             backend: backend_name,
             fallbacks: fallbacks.clone(),
         });
-        self.debug(&format!("prepared backend={backend_name}"));
+        tracing::debug!("prepared backend={backend_name}");
 
         let started = self
             .scope
@@ -166,7 +201,7 @@ impl Controller {
                 match self.run_gpu(request, started, fallbacks.clone()).await {
                     Ok(()) => Ok(()),
                     Err(error) => {
-                        self.debug(&format!("WebGPU runtime fallback: {error}"));
+                        tracing::debug!("WebGPU runtime fallback: {error}");
                         fallbacks.push(format!("webgpu runtime: {error}"));
                         self.post(&SearchEvent::Device {
                             name: format!("WASM Rayon · {} threads", request.threads),
@@ -221,10 +256,10 @@ impl Controller {
         if let Some((cached_key, session)) = self.gpu_session.borrow().as_ref()
             && *cached_key == key
         {
-            self.debug("reusing cached WebGPU session");
+            tracing::debug!("reusing cached WebGPU session");
             return Ok(Rc::clone(session));
         }
-        self.debug("creating WebGPU session");
+        tracing::debug!("creating WebGPU session");
         let session = Rc::new(GpuSession::new(request).await?);
         self.gpu_session.replace(Some((key, Rc::clone(&session))));
         Ok(session)
@@ -233,12 +268,6 @@ impl Controller {
     pub(super) fn post(&self, event: &SearchEvent) {
         if let Ok(value) = serde_wasm_bindgen::to_value(event) {
             drop(self.scope.post_message(&value));
-        }
-    }
-
-    pub(super) fn debug(&self, message: &str) {
-        if self.debug_enabled.get() {
-            web_sys::console::debug_1(&format!("[wasm] {message}").into());
         }
     }
 }

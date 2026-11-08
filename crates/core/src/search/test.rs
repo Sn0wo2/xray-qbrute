@@ -89,7 +89,7 @@ fn gpu_backend_cli_names_are_explicit() {
 fn available_backends_return_the_same_minimum_match() {
     let config = config();
     let scalar = search(&config, BackendKind::Scalar, Arc::new(|_| {})).expect("scalar works");
-    assert_eq!(scalar.hit, Some(backend::SearchHit { index: 0 }));
+    assert_eq!(scalar.hit, Some(0));
     assert_eq!(scalar.processed, 1);
 
     #[cfg(feature = "avx2")]

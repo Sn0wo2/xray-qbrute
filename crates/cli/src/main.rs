@@ -2,12 +2,12 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
+use acta::TracingGuard;
 use clap::Parser;
 use indicatif::{ProgressBar, ProgressStyle};
 use num_format::{Locale, ToFormattedString};
-use xray_qbrute_core::backend::{
-    ProgressReporter, SearchConfig, SearchError, expected_search_seconds, hit_probability,
-};
+use tracing::{error, info, warn};
+use xray_qbrute_core::backend::{ProgressReporter, SearchConfig, SearchError};
 use xray_qbrute_core::candidate::{self, CandidateConfig, DEFAULT_DIFFICULTY_BITS, MAX_UUID_INDEX};
 use xray_qbrute_core::search::{self, BackendKind};
 
@@ -31,7 +31,12 @@ struct Args {
     #[arg(long, value_enum, default_value_t = BackendKind::Auto)]
     backend: BackendKind,
 
-    #[arg(long, default_value_t = DEFAULT_DIFFICULTY_BITS, value_name = "BITS")]
+    #[arg(
+        long,
+        default_value_t = DEFAULT_DIFFICULTY_BITS,
+        value_name = "BITS",
+        value_parser = clap::value_parser!(u32).range(..=64)
+    )]
     difficulty: u32,
 
     #[arg(long, default_value_t = 0, value_name = "COUNT")]
@@ -68,25 +73,37 @@ fn format_rate(rate_per_second: f64) -> String {
     format!("{value:.1} {}", UNITS.get(unit).copied().unwrap_or("TH/s"))
 }
 
-#[allow(
-    clippy::cast_sign_loss,
-    clippy::expect_used,
-    clippy::print_stderr,
-    clippy::print_stdout
-)]
+#[allow(clippy::print_stderr)]
+#[allow(clippy::single_call_fn)]
+fn init_logging() -> TracingGuard {
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info,wgpu=error"));
+    let path_width: usize = env!("ACTA_PATH_WIDTH").parse().unwrap_or(40);
+    let formatter = acta::Formatter::new().with_path_width(path_width);
+    let config = acta::Config::builder()
+        .with_filter(filter)
+        .with_writers([acta::Writer::stderr().with_format(acta::Format::Compact(formatter))])
+        .build();
+    match acta::init(config) {
+        Ok(guard) => guard,
+        Err(error) => {
+            eprintln!("error: failed to initialize logging: {error}");
+            std::process::exit(2);
+        }
+    }
+}
+
+#[allow(clippy::cast_sign_loss, clippy::expect_used, clippy::print_stdout)]
 fn main() {
     let args = Args::parse();
-    if args.difficulty > 64 {
-        eprintln!("error: --difficulty must be in 0..=64");
-        std::process::exit(2);
-    }
+    let _logging = init_logging();
     if args.threads > 0
         && rayon::ThreadPoolBuilder::new()
             .num_threads(args.threads)
             .build_global()
             .is_err()
     {
-        eprintln!("error: failed to configure --threads {}", args.threads);
+        error!(threads = args.threads, "failed to configure --threads");
         std::process::exit(2);
     }
 
@@ -95,25 +112,24 @@ fn main() {
         let node_suffix =
             parse_hex_u32("node-suffix", &args.node_suffix).map_err(SearchError::InvalidConfig)?;
 
-        let candidate = CandidateConfig {
-            commit,
-            node_suffix,
-        };
         let config = SearchConfig {
-            candidate,
+            candidate: CandidateConfig {
+                commit,
+                node_suffix,
+            },
             start_index: args.start,
             max_index: args.max_index,
             leading_zero_bits: args.difficulty,
         };
 
-        println!("===== xray-qbrute =====");
-        println!("Threads: {}", rayon::current_num_threads());
-        println!("COMMIT: {}", args.commit);
-        println!("NODE_SUFFIX: {}", args.node_suffix);
-        println!("Backend request: {}", args.backend);
-        println!(
-            "Range: [{:#x}, {:#x})",
-            config.start_index, config.max_index
+        info!(
+            threads = rayon::current_num_threads(),
+            commit = %args.commit,
+            node_suffix = %args.node_suffix,
+            backend = %args.backend,
+            range_start = format!("{:#x}", config.start_index),
+            range_end = format!("{:#x}", config.max_index),
+            "xray-qbrute search starting"
         );
 
         let processed_total = Arc::new(AtomicU64::new(0));
@@ -136,7 +152,8 @@ fn main() {
         let progress: ProgressReporter = Arc::new(move |count| {
             callback_total.fetch_add(count, Ordering::Relaxed);
             let total = callback_total.load(Ordering::Relaxed);
-            let probability = hit_probability(total, config.leading_zero_bits);
+            let probability =
+                -(-(total as f64) / 2_f64.powi(config.leading_zero_bits as i32)).exp_m1();
             callback_bar.set_position((probability * 1000.0).min(999.999) as u64);
             let rate = total as f64 / callback_start.elapsed().as_secs_f64().max(f64::EPSILON);
             callback_bar.set_message(format!(
@@ -151,12 +168,11 @@ fn main() {
         let interrupt_start = config.start_index;
         let interrupt_bar = progress_bar.clone();
         ctrlc::set_handler(move || {
-            let next =
-                (interrupt_start + interrupt_total.load(Ordering::Relaxed)) & (MAX_UUID_INDEX - 1);
+            let total = interrupt_total.load(Ordering::Relaxed);
+            let next = (interrupt_start + total) & (MAX_UUID_INDEX - 1);
             interrupt_bar.suspend(|| {
-                eprintln!(
-                    "\nInterrupted after {} candidates.\nResume from: --start {next}  (0x{next:x})",
-                    interrupt_total.load(Ordering::Relaxed)
+                warn!(
+                    "interrupted after {total} candidates; resume with --start {next} (0x{next:x})"
                 );
             });
             std::process::exit(130);
@@ -171,42 +187,55 @@ fn main() {
         let elapsed = outcome.search_elapsed.unwrap_or(wall_elapsed);
 
         for reason in &outcome.fallback_reasons {
-            eprintln!("backend fallback: {reason}");
+            warn!(reason = %reason, "backend fallback");
         }
 
         if let Some(device) = &outcome.device_name {
-            println!("Device: {device}");
+            info!(device = %device, "device selected");
         }
-        println!("Backend: {}", outcome.backend_name);
+        info!(backend = %outcome.backend_name, "backend used");
         if let Some(kernel_config) = &outcome.kernel_config {
-            println!("Kernel: {kernel_config}");
+            info!(kernel = %kernel_config, "kernel configuration");
         }
         if let Some(tuning_elapsed) = outcome.tuning_elapsed {
-            println!("GPU tuning: {:.2}s", tuning_elapsed.as_secs_f64());
+            info!(
+                elapsed_s = tuning_elapsed.as_secs_f64(),
+                "GPU kernel tuning"
+            );
         }
         let speed = outcome.evaluated as f64 / elapsed.as_secs_f64().max(f64::EPSILON);
+        let probability =
+            -(-(outcome.evaluated as f64) / 2_f64.powi(config.leading_zero_bits as i32)).exp_m1();
+        let expected_seconds =
+            2_f64.powi(config.leading_zero_bits as i32) / speed.max(f64::EPSILON);
 
-        let probability = hit_probability(outcome.evaluated, config.leading_zero_bits);
-        let expected_seconds = expected_search_seconds(config.leading_zero_bits, speed);
+        if outcome.hit.is_some() {
+            progress_bar.set_position(1000);
+        }
+        progress_bar.finish_with_message(if outcome.hit.is_some() {
+            "Found!"
+        } else {
+            "Not found"
+        });
 
         if let Some(hit) = outcome.hit {
-            let hash = candidate::digest(hit.index, config.candidate);
-            let first_word = candidate::digest_word(&hash);
-            if !candidate::matches_leading_zero_bits(first_word, config.leading_zero_bits) {
+            let hash = candidate::digest(hit, config.candidate);
+            if !candidate::matches_leading_zero_bits(
+                candidate::digest_word(&hash),
+                config.leading_zero_bits,
+            ) {
                 return Err(SearchError::Runtime(format!(
-                    "backend returned an invalid hit at index {}",
-                    hit.index
+                    "backend returned an invalid hit at index {hit}"
                 )));
             }
 
-            let uuid =
-                uuid::Uuid::from_bytes(candidate::candidate_bytes(hit.index, config.candidate))
-                    .to_string();
+            let uuid = uuid::Uuid::from_bytes(candidate::candidate_bytes(hit, config.candidate))
+                .to_string();
             println!("\n===== FOUND =====");
             println!("UUID      : {uuid}");
             println!("answer    : /answer {uuid}");
             println!("hash[:10] : {}", hex::encode(&hash[..10]));
-            println!("hit       : index {}", hit.index);
+            println!("hit       : index {hit}");
             println!("evaluated : {} candidates", outcome.evaluated);
             println!("time      : {:.2}s", elapsed.as_secs_f64());
             println!("rate      : {}", format_rate(speed));
@@ -216,8 +245,6 @@ fn main() {
                 expected_seconds,
                 format_rate(speed)
             );
-            progress_bar.set_position(1000);
-            progress_bar.finish_with_message("Found!");
         } else {
             println!("\n===== NOT FOUND =====");
             println!("evaluated : {} candidates", outcome.evaluated);
@@ -231,13 +258,12 @@ fn main() {
             );
             let next = (config.start_index + outcome.evaluated) & (MAX_UUID_INDEX - 1);
             println!("resume            : --start {next}  (0x{next:x})");
-            progress_bar.finish_with_message("Not found");
         }
 
         Ok(())
     })();
     if let Err(error) = result {
-        eprintln!("error: {error}");
+        error!("{error}");
         std::process::exit(2);
     }
 }

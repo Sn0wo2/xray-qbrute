@@ -20,11 +20,11 @@ impl Controller {
         started: f64,
         fallbacks: Vec<String>,
     ) -> Result<(), String> {
-        self.debug(&format!("CPU search begin kernel={kernel:?}"));
+        tracing::debug!(kernel = ?kernel, "CPU search begin");
         let mut base = 0_u64;
         while base < request.max_index {
             if self.cancelled.get() {
-                self.debug(&format!("CPU search stopped processed={base}"));
+                tracing::debug!(processed = base, "CPU search stopped");
                 self.finish(request, "stopped", None, base, base, started, fallbacks);
                 return Ok(());
             }
@@ -103,7 +103,7 @@ impl Controller {
                 .unwrap_or(u64::MAX);
             let evaluated = base + u64::from(count);
             if hit != u64::MAX {
-                self.debug(&format!("CPU hit index={hit} evaluated={evaluated}"));
+                tracing::debug!(index = hit, evaluated = evaluated, "CPU hit");
                 self.finish(
                     request,
                     "found",
@@ -116,7 +116,7 @@ impl Controller {
                 return Ok(());
             }
             base = evaluated;
-            self.debug(&format!("CPU batch complete processed={base}"));
+            tracing::debug!(processed = base, "CPU batch complete");
             self.progress(base, base, request.max_index, started);
             JsFuture::from(js_sys::Promise::new(&mut |resolve, reject| {
                 let callback = Closure::once(move || {
@@ -145,7 +145,7 @@ impl Controller {
             started,
             fallbacks,
         );
-        self.debug("CPU range exhausted");
+        tracing::debug!("CPU range exhausted");
         Ok(())
     }
 
@@ -156,15 +156,17 @@ impl Controller {
         started: f64,
         fallbacks: Vec<String>,
     ) -> Result<(), String> {
-        self.debug("WebGPU search begin");
+        tracing::debug!("WebGPU search begin");
         let session = self.prepare_gpu(request).await?;
         let mut base = 0_u64;
         let mut evaluated = 0_u64;
         while base < request.max_index {
             if self.cancelled.get() {
-                self.debug(&format!(
-                    "WebGPU search stopped processed={base} evaluated={evaluated}"
-                ));
+                tracing::debug!(
+                    processed = base,
+                    evaluated = evaluated,
+                    "WebGPU search stopped"
+                );
                 self.finish(
                     request, "stopped", None, base, evaluated, started, fallbacks,
                 );
@@ -173,9 +175,12 @@ impl Controller {
             let count = (request.max_index - base).min(GPU_BATCH_SIZE) as u32;
             let offset = session.dispatch(base, count).await?;
             evaluated += u64::from(count);
-            self.debug(&format!(
-                "WebGPU batch base={base} count={count} result_offset={offset}"
-            ));
+            tracing::debug!(
+                base = base,
+                count = count,
+                result_offset = offset,
+                "WebGPU batch complete"
+            );
             if offset != u32::MAX {
                 let index = base + u64::from(offset);
                 self.finish(
@@ -201,7 +206,7 @@ impl Controller {
             started,
             fallbacks,
         );
-        self.debug("WebGPU range exhausted");
+        tracing::debug!("WebGPU range exhausted");
         Ok(())
     }
 
@@ -229,9 +234,13 @@ impl Controller {
         started: f64,
         fallbacks: Vec<String>,
     ) {
-        self.debug(&format!(
-            "finish kind={kind} index={index:?} processed={processed} evaluated={evaluated}"
-        ));
+        tracing::debug!(
+            kind,
+            index = ?index,
+            processed = processed,
+            evaluated = evaluated,
+            "search finish"
+        );
         let (uuid, hash) = index
             .map(|index| {
                 let config = CandidateConfig {
