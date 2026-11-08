@@ -152,6 +152,7 @@ jobs:
             git fetch origin "$DEFAULT_BRANCH"
             git checkout --detach FETCH_HEAD
             git cherry-pick "$release_sha"
+            release_sha=$(git rev-parse HEAD)
             git -c credential.helper='!gh auth git-credential' push origin "HEAD:refs/heads/$DEFAULT_BRANCH"
           else
             git tag "v$VERSION"
