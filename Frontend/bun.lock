@@ -7,8 +7,9 @@
       "dependencies": {
         "@fontsource-variable/noto-sans-mono": "^5.3.0",
         "@fontsource-variable/noto-sans-sc": "^5.3.1",
-        "@m234/nerd-fonts": "^0.5.2",
+        "@lucide/vue": "^1.70.0",
         "@teal-ink/vue": "^0.1.1",
+        "@vueuse/core": "^15.0.0",
         "coi-serviceworker": "^0.1.7",
         "vue": "^3.5.44",
       },
@@ -129,7 +130,7 @@
 
     "@juggle/resize-observer": ["@juggle/resize-observer@3.4.0", "http://repo.nju.edu.cn/npm/@juggle/resize-observer/-/resize-observer-3.4.0.tgz", {}, "sha512-dfLbk+PwWvFzSxwk3n5ySL0hfBog779o8h68wK/7/APo/7cgyWp5jcXockbxdk5kFRkbeXWm4Fbi9FrdN381sA=="],
 
-    "@m234/nerd-fonts": ["@m234/nerd-fonts@0.5.2", "http://repo.nju.edu.cn/npm/@m234/nerd-fonts/-/nerd-fonts-0.5.2.tgz", {}, "sha512-5iPrWe+y2/5OBcfFlXjYQ2GKlJxKrRaoWpqJHYX1kv1fj6PI3xTtRBR9r+gUi/JqwSqm/GmvZYZkB482B4/DFA=="],
+    "@lucide/vue": ["@lucide/vue@1.70.0", "http://repo.nju.edu.cn/npm/@lucide/vue/-/vue-1.70.0.tgz", { "peerDependencies": { "vue": ">=3.0.1" } }, "sha512-kutUu3oEtfQnyaP6hh76ShG2dxa8PiL6uY3rk3DqclQe0Vd2FtPlnclezR0XMQtlFMPiEaCOXDSuhehFHW5ErQ=="],
 
     "@oxc-project/types": ["@oxc-project/types@0.156.0", "http://repo.nju.edu.cn/npm/@oxc-project/types/-/types-0.156.0.tgz", {}, "sha512-1Duyg48TdJNdyhEB8Xn1L36bT9Pv6GUtlKjHxOys8xkaF/rQq3XJE+bAurSK/AgIz5mGFsb77cn9Pb20+WCScw=="],
 
@@ -199,6 +200,8 @@
 
     "@types/node": ["@types/node@24.19.2", "http://repo.nju.edu.cn/npm/@types/node/-/node-24.19.2.tgz", { "dependencies": { "undici-types": ">=7.24.0 <7.24.7" } }, "sha512-93d49wCWJkCyN87MxLpNN6KXPCwFw7bVUg79mGUV1OS40JGWwVCr8n61DXCSqz7CV6/VfPkb7xec7uP2M+QHWQ=="],
 
+    "@types/web-bluetooth": ["@types/web-bluetooth@0.0.21", "http://repo.nju.edu.cn/npm/@types/web-bluetooth/-/web-bluetooth-0.0.21.tgz", {}, "sha512-oIQLCGWtcFZy2JW77j9k8nHzAOpqMHLQejDA48XXMWH6tjCQHz5RCFz1bzsmROyL6PUm+LLnUiI4BCn221inxA=="],
+
     "@vitejs/plugin-vue": ["@vitejs/plugin-vue@6.0.10", "http://repo.nju.edu.cn/npm/@vitejs/plugin-vue/-/plugin-vue-6.0.10.tgz", { "dependencies": { "@rolldown/pluginutils": "^1.0.1" }, "peerDependencies": { "vite": "^5.0.0 || ^6.0.0 || ^7.0.0 || ^8.0.0", "vue": "^3.2.25 || ^3.6.0-rc.10" } }, "sha512-b80aUQh3n+qEzzZm5oQp3rT2QImeCx58K6eFl/RkJ3d65KW0kTuv5lNsLRVAjbW9YRUpo/wzmvzMgV34bTAItA=="],
 
     "@volar/language-core": ["@volar/language-core@2.4.28", "http://repo.nju.edu.cn/npm/@volar/language-core/-/language-core-2.4.28.tgz", { "dependencies": { "@volar/source-map": "2.4.28" } }, "sha512-w4qhIJ8ZSitgLAkVay6AbcnC7gP3glYM3fYwKV3srj8m494E3xtrCv6E+bWviiK/8hs6e6t1ij1s2Endql7vzQ=="],
@@ -226,6 +229,12 @@
     "@vue/server-renderer": ["@vue/server-renderer@3.5.44", "http://repo.nju.edu.cn/npm/@vue/server-renderer/-/server-renderer-3.5.44.tgz", { "dependencies": { "@vue/compiler-ssr": "3.5.44", "@vue/runtime-dom": "3.5.44", "@vue/shared": "3.5.44" } }, "sha512-R4S1UoH4h5Frrauv8Z5XE5TxV9oBiUSgWIC4TyVK1FK+RocRnOLwFA5Xcmo2011RlgJp+AbZCnw6afrhlgRuUQ=="],
 
     "@vue/shared": ["@vue/shared@3.5.44", "http://repo.nju.edu.cn/npm/@vue/shared/-/shared-3.5.44.tgz", {}, "sha512-H82XLH0DjmSOdbEwO15x3QTo1f5PWEtv237eLpYKc0mqLu+B8hnq16lFWmuBmNurkeiG3wr+oM1FhOll/YVFRg=="],
+
+    "@vueuse/core": ["@vueuse/core@15.0.0", "http://repo.nju.edu.cn/npm/@vueuse/core/-/core-15.0.0.tgz", { "dependencies": { "@types/web-bluetooth": "^0.0.21", "@vueuse/metadata": "15.0.0", "@vueuse/shared": "15.0.0" }, "peerDependencies": { "vue": "^3.5.0" } }, "sha512-Zv67h5mrk7YHDJsRObx+DXaCBz6RKBUpxqLesJ+3xZNPG6yuQs7ja7kg3veFrrouYLWAqydQ7CwGEbLVxB43Ng=="],
+
+    "@vueuse/metadata": ["@vueuse/metadata@15.0.0", "http://repo.nju.edu.cn/npm/@vueuse/metadata/-/metadata-15.0.0.tgz", {}, "sha512-sfWE5LADAKJ0KnjtGliMdSN8Ij/L7uP6rXIZlgPloAI4zvvefbw6H5Lt7KJA6RqQOYgVqWF5Guj50HHMIzygBg=="],
+
+    "@vueuse/shared": ["@vueuse/shared@15.0.0", "http://repo.nju.edu.cn/npm/@vueuse/shared/-/shared-15.0.0.tgz", { "peerDependencies": { "vue": "^3.5.0" } }, "sha512-vbNXhGrbV53xPOMSyOzMHQRvhMgZf7oNDw2RChUetVxwTIEkInQ1joZ9JbT0G3z2n2AJNjvmCWeM9ySYrnvogA=="],
 
     "alien-signals": ["alien-signals@3.2.1", "http://repo.nju.edu.cn/npm/alien-signals/-/alien-signals-3.2.1.tgz", {}, "sha512-I8FjmltrfnDFoZedi5CG8DghVYNhzb/Ijluz7tCSJH0xpd0484Kowhbb1XDYOxfJpU1p5wnM2X54dA+IfGyD1g=="],
 

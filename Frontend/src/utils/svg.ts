@@ -1,0 +1,4 @@
+export function svgDataUrl(inner: string): string {
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#000" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${inner}</svg>`
+  return `data:image/svg+xml,${encodeURIComponent(svg)}`
+}

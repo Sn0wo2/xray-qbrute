@@ -26,6 +26,7 @@ try {
   await module.initThreadPool(threads)
   log("Rayon initialized", { threads, elapsedMs: performance.now() - rayonStarted })
   module.install_coordinator()
+  module.prewarm_gpu?.()
   log("coordinator installed")
 } catch (error) {
   console.error("[search-worker] startup failed", error)
