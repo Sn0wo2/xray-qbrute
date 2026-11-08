@@ -285,7 +285,7 @@ jobs:
 
       - name: Prepare publishing configuration
         run: |
-          cp .goreleaser.yaml "$RUNNER_TEMP/goreleaser-publish.yml"
+          cp .goreleaser.yml "$RUNNER_TEMP/goreleaser-publish.yml"
           printf '\ndist: %s\n' "$RUNNER_TEMP/goreleaser-publish" >> "$RUNNER_TEMP/goreleaser-publish.yml"
 
       - uses: goreleaser/goreleaser-action@v7
