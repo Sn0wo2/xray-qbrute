@@ -165,7 +165,7 @@ unescaped_backticks = "warn"
 [workspace.dependencies]
 sha2 = "0.11.1"
 thiserror = "2.0.21"
-acta = "0.8.4"
+acta = { version = "0.8.4", default-features = false }
 acta-build = "0.8.4"
 tracing = "0.1.43"
 tracing-subscriber = { version = "0.3.21", features = ["env-filter"] }
